@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>BDR 팀 랭킹</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --blue:#1769ff; --bg:#f6f8fb; --card:#fff; --ink:#111827; --muted:#6b7280;
+    --line:#eef2f7; --good:#16a34a; --bad:#ef4444; --flat:#9ca3af;
+    --shadow:0 10px 30px rgba(17,24,39,.08); --radius:18px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);font-family:'Pretendard','Apple SD Gothic Neo',system-ui,-apple-system,sans-serif;color:var(--ink)}
+  .wrap{max-width:1000px;margin:28px auto;padding:16px}
+  .card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
+  header h1{margin:0 0 6px;font-size:24px}
+  header .sub{color:var(--muted);font-size:13px}
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0 8px}
+  .toolbar input[type="text"]{flex:1 1 260px;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  .toolbar button,.toolbar .ghost{
+    border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px 12px;cursor:pointer
+  }
+  .toolbar button:hover{background:#f8fafc}
+  .pill{display:inline-flex;align-items:center;gap:6px;background:#eef2ff;color:#3730a3;padding:4px 10px;border-radius:999px;font-size:12px}
+  table{width:100%;border-collapse:collapse;margin-top:10px}
+  th,td{border-bottom:1px solid var(--line);padding:12px 10px;text-align:left;vertical-align:middle}
+  th{color:var(--muted);font-weight:600;font-size:12px;user-select:none}
+  th.sortable{cursor:pointer}
+  th.sortable span{display:inline-flex;align-items:center;gap:6px}
+  .rank{width:68px;text-align:center}
+  .pts{width:140px;text-align:right}
+  .change{width:140px;text-align:right}
+  .updated{width:140px}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
+  .gold{background:#fff7d6;border:1px solid #f5de6b}
+  .silver{background:#f5f7fa;border:1px solid #dfe5ee}
+  .bronze{background:#fff1e0;border:1px solid #f0c59a}
+  .trend-up{color:var(--good);font-weight:600}
+  .trend-down{color:var(--bad);font-weight:600}
+  .trend-flat{color:var(--flat);font-weight:600}
+  .foot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;color:var(--muted);font-size:12px}
+  .hidden{display:none}
+  @media (max-width:640px){
+    .pts,.change,.updated{white-space:nowrap}
+    th:nth-child(4), td:nth-child(4){display:none} /* lastUpdated 컬럼 모바일에서 감춤 */
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <header>
+        <h1>BDR 팀 랭킹</h1>
+        <div class="sub" id="meta">서버 연결 확인 중…</div>
+      </header>
+
+      <div class="toolbar">
+        <input id="q" type="text" placeholder="팀명 검색 (예: STIZ)" />
+        <button id="btnReload">새로고침</button>
+        <button id="btnExport">CSV로 저장</button>
+        <label class="ghost" style="display:flex;align-items:center;gap:8px;">
+          <input id="auto" type="checkbox" />
+          자동 새로고침(5분)
+        </label>
+        <span id="count" class="pill">0개</span>
+      </div>
+
+      <table id="tb">
+        <thead>
+          <tr>
+            <th class="rank">순위</th>
+            <th class="sortable" data-key="teamName"><span>팀명</span></th>
+            <th class="pts sortable" data-key="totalPoints"><span>포인트</span></th>
+            <th class="change sortable" data-key="deltaPoints"><span>변동</span></th>
+            <th class="updated sortable" data-key="lastUpdated"><span>최종 업데이트</span></th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <!-- rows go here -->
+        </tbody>
+      </table>
+
+      <div class="foot">
+        <div id="version">버전 확인 중…</div>
+        <div>※ 포인트 = 기본점수 × 디비전가중치 × 대회규모 × 시간가치(Y-0~Y-3)</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/** ⬇⬇⬇ 여기를 본인 Apps Script 웹앱 URL로 교체하세요 ⬇⬇⬇ */
+const API_BASE = 'REPLACE_WITH_GAS_WEBAPP_URL';
+/** 예: https://script.google.com/macros/s/AKfycb.../exec  (끝에 /exec 포함) */
+
+let RAW = [];         // 원본 rows
+let VIEW = [];        // 필터/정렬 적용된 rows
+let sortKey = 'totalPoints';
+let sortDir = 'desc'; // 'asc' | 'desc'
+let autoTimer = null;
+
+function fmtPoints(n){
+  const v = Number(n||0);
+  return v.toLocaleString(undefined, {maximumFractionDigits:2});
+}
+function fmtChange(delta, trend){
+  if(delta === null || delta === undefined || isNaN(delta)) return '<span class="trend-flat">—</span>';
+  const v = Number(delta);
+  if(v > 0)  return `<span class="trend-up">▲ +${fmtPoints(v)}</span>`;
+  if(v < 0)  return `<span class="trend-down">▼ ${fmtPoints(v)}</span>`;
+  return `<span class="trend-flat">—</span>`;
+}
+function medalBadge(rank){
+  if(rank===1) return '<span class="badge gold">🥇 1위</span>';
+  if(rank===2) return '<span class="badge silver">🥈 2위</span>';
+  if(rank===3) return '<span class="badge bronze">🥉 3위</span>';
+  return rank;
+}
+
+async function fetchJSON(url){
+  const res = await fetch(url, {method:'GET'});
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  return await res.json();
+}
+
+async function loadAll(){
+  try{
+    // 리더보드
+    const lb = await fetchJSON(`${API_BASE}?path=leaderboard`);
+    RAW = Array.isArray(lb.rows) ? lb.rows.map(r => ({
+      teamName: r.teamName || r.teamname || '',
+      totalPoints: Number(r.totalPoints ?? r.totalpoints ?? 0),
+      deltaPoints: (r.deltaPoints ?? r.deltapoints),
+      trend: (r.trend || '').toUpperCase(),
+      lastUpdated: r.lastUpdated || r.lastupdated || '',
+    })) : [];
+    document.getElementById('count').textContent = `${RAW.length}개`;
+
+    // 서버 상태/버전
+    const hv = await fetchJSON(`${API_BASE}?path=health`);
+    document.getElementById('meta').textContent =
+      `서버시간 ${new Date(hv.time||Date.now()).toLocaleString()} · ${lb.count||RAW.length}팀`;
+    document.getElementById('version').textContent = hv.version || '';
+
+    applyFilterSortRender();
+  }catch(err){
+    console.error(err);
+    document.getElementById('meta').textContent = '서버 연결 오류. URL 또는 권한을 확인하세요.';
+  }
+}
+
+function applyFilterSortRender(){
+  const q = (document.getElementById('q').value || '').trim().toLowerCase();
+  VIEW = RAW.filter(r => r.teamName.toLowerCase().includes(q));
+
+  VIEW.sort((a,b)=>{
+    let av = a[sortKey], bv = b[sortKey];
+    // null/undefined 안전 처리
+    if(av===undefined || av===null) av = sortKey==='teamName' ? '' : -Infinity;
+    if(bv===undefined || bv===null) bv = sortKey==='teamName' ? '' : -Infinity;
+
+    if(sortKey==='teamName'){
+      return sortDir==='asc'
+        ? String(av).localeCompare(String(bv))
+        : String(bv).localeCompare(String(av));
+    }
+    if(sortKey==='lastUpdated'){
+      const ad = new Date(av||0).getTime(), bd = new Date(bv||0).getTime();
+      return sortDir==='asc' ? (ad-bd) : (bd-ad);
+    }
+    // 숫자(포인트/변동)
+    const na = Number(av), nb = Number(bv);
+    return sortDir==='asc' ? (na-nb) : (nb-na);
+  });
+
+  renderTable(VIEW);
+}
+
+function renderTable(rows){
+  const tb = document.getElementById('rows');
+  tb.innerHTML = '';
+  rows.forEach((r, i)=>{
+    const rankCell = medalBadge(i+1);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="rank">${rankCell}</td>
+      <td>${escapeHtml(r.teamName)}</td>
+      <td class="pts">${fmtPoints(r.totalPoints)}</td>
+      <td class="change">${fmtChange(r.deltaPoints, r.trend)}</td>
+      <td class="updated">${r.lastUpdated || ''}</td>
+    `;
+    tb.appendChild(tr);
+  });
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m]));
+}
+
+function setSort(key){
+  if(sortKey===key){
+    sortDir = (sortDir==='asc'?'desc':'asc');
+  }else{
+    sortKey = key;
+    sortDir = (key==='teamName' ? 'asc' : 'desc');
+  }
+  applyFilterSortRender();
+}
+
+function exportCSV(){
+  const header = ['rank','teamName','totalPoints','deltaPoints','lastUpdated'];
+  const lines = [header.join(',')];
+  VIEW.forEach((r,i)=>{
+    const row = [
+      i+1,
+      `"${(r.teamName||'').replace(/"/g,'""')}"`,
+      r.totalPoints ?? '',
+      r.deltaPoints ?? '',
+      r.lastUpdated ?? ''
+    ];
+    lines.push(row.join(','));
+  });
+  const blob = new Blob([lines.join('\n')], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `bdr-team-ranking-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// 이벤트 바인딩
+document.getElementById('btnReload').addEventListener('click', loadAll);
+document.getElementById('btnExport').addEventListener('click', exportCSV);
+document.getElementById('q').addEventListener('input', applyFilterSortRender);
+document.querySelectorAll('th.sortable').forEach(th=>{
+  th.addEventListener('click', ()=> setSort(th.dataset.key));
+});
+document.getElementById('auto').addEventListener('change', (e)=>{
+  if(e.target.checked){
+    if(autoTimer) clearInterval(autoTimer);
+    autoTimer = setInterval(loadAll, 5*60*1000);
+  }else{
+    if(autoTimer) clearInterval(autoTimer);
+    autoTimer = null;
+  }
+});
+
+// 초기 로드
+loadAll();
+</script>
+</body>
+</html>
