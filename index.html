@@ -3,256 +3,536 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>BDR 팀 랭킹</title>
+<title>BDR 랭킹 - 통합판 v1.01 (GAS 연동)</title>
+
+<!-- Tailwind & libs (이미지 저장용 html2canvas만 유지) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@500;700;800;900&display=swap" rel="stylesheet">
+
+<link rel="preload" as="image"
+  href="https://cdn.jsdelivr.net/gh/cobby8/BDR-ranking-d@c4eb7d9aeb7e32de9ab7bb2f2e9b84e23b470f4e/bdr-logo.png"
+  crossorigin />
+
+<meta name="color-scheme" content="dark" />
 <style>
-  :root{
-    --blue:#1769ff; --bg:#f6f8fb; --card:#fff; --ink:#111827; --muted:#6b7280;
-    --line:#eef2f7; --good:#16a34a; --bad:#ef4444; --flat:#9ca3af;
-    --shadow:0 10px 30px rgba(17,24,39,.08); --radius:18px;
-  }
   *{box-sizing:border-box}
-  html,body{height:100%}
-  body{margin:0;background:var(--bg);font-family:'Pretendard','Apple SD Gothic Neo',system-ui,-apple-system,sans-serif;color:var(--ink)}
-  .wrap{max-width:1000px;margin:28px auto;padding:16px}
-  .card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
-  header h1{margin:0 0 6px;font-size:24px}
-  header .sub{color:var(--muted);font-size:13px}
-  .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0 8px}
-  .toolbar input[type="text"]{flex:1 1 260px;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
-  .toolbar button,.toolbar .ghost{
-    border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px 12px;cursor:pointer
-  }
-  .toolbar button:hover{background:#f8fafc}
-  .pill{display:inline-flex;align-items:center;gap:6px;background:#eef2ff;color:#3730a3;padding:4px 10px;border-radius:999px;font-size:12px}
-  table{width:100%;border-collapse:collapse;margin-top:10px}
-  th,td{border-bottom:1px solid var(--line);padding:12px 10px;text-align:left;vertical-align:middle}
-  th{color:var(--muted);font-weight:600;font-size:12px;user-select:none}
-  th.sortable{cursor:pointer}
-  th.sortable span{display:inline-flex;align-items:center;gap:6px}
-  .rank{width:68px;text-align:center}
-  .pts{width:140px;text-align:right}
-  .change{width:140px;text-align:right}
-  .updated{width:140px}
-  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
-  .gold{background:#fff7d6;border:1px solid #f5de6b}
-  .silver{background:#f5f7fa;border:1px solid #dfe5ee}
-  .bronze{background:#fff1e0;border:1px solid #f0c59a}
-  .trend-up{color:var(--good);font-weight:600}
-  .trend-down{color:var(--bad);font-weight:600}
-  .trend-flat{color:var(--flat);font-weight:600}
-  .foot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;color:var(--muted);font-size:12px}
-  .hidden{display:none}
-  @media (max-width:640px){
-    .pts,.change,.updated{white-space:nowrap}
-    th:nth-child(4), td:nth-child(4){display:none} /* lastUpdated 컬럼 모바일에서 감춤 */
-  }
+  :root{--surface:#0e141c;--card:#131a24;--muted:#94a3b8;--accent:#ffd54a}
+  html,body{background:var(--surface); font-family:"Noto Sans KR", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Apple SD Gothic Neo", Pretendard, sans-serif; font-size:17px; line-height:1.55; -webkit-font-smoothing:antialiased; text-rendering:geometricPrecision}
+  .card{background:var(--card); border:1px solid #1f2a3a}
+  .muted{color:var(--muted)} .accent{color:var(--accent)} .shadow-smooth{box-shadow:0 10px 30px rgba(0,0,0,.35)} .num{font-variant-numeric:tabular-nums}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .control-lg{font-size:20px} .control-label{font-size:18px}
+  @media (max-width:480px){ .control-lg{font-size:18px} .control-label{font-size:16px} }
+
+  .move-badge{ transform:scale(.8); transform-origin:left center; }
+  .ex-move-badge{ transform:none; height:26px; padding:3px 10px; font-size:.95rem; line-height:1; }
+  .badge{border-radius:9999px;border:1px solid rgba(148,163,184,.34);line-height:1;font-weight:800;font-size:1rem}
+  .badge-grid{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:4px 12px}
+  .badge-pill{display:inline-flex;align-items:center;justify-content:center;height:28px;padding:4px 12px}
+  .badge-up{background:rgba(239,68,68,.18);color:#fca5a5;border-color:rgba(239,68,68,.55)}
+  .badge-down{background:rgba(59,130,246,.18);color:#93c5fd;border-color:rgba(59,130,246,.55)}
+  .badge-stay{background:rgba(148,163,184,.14);color:#cbd5e1;border-color:rgba(148,163,184,.34)}
+  .ico{width:16px;height:16px;position:relative;display:inline-block;vertical-align:middle}
+  .ico::before,.ico::after{content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:currentColor;border-radius:2px}
+  .ico.plus::before,.ico.minus::before,.ico.dash::before{width:14px;height:2px}
+  .ico.plus::after{width:2px;height:14px}
+
+  .score-up{color:#f87171;font-weight:700}
+  .score-down{color:#60a5fa;font-weight:700}
+  .score-same{color:#94a3b8;font-weight:600}
+
+  .top1{border:1.5px solid rgba(255,215,0,.55);background:linear-gradient(180deg,rgba(255,215,0,.10),transparent 50%),var(--card)}
+  .top2{border:1.5px solid rgba(192,192,192,.55);background:linear-gradient(180deg,rgba(192,192,192,.10),transparent 50%),var(--card)}
+  .top3{border:1.5px solid rgba(205,127,50,.55);background:linear-gradient(180deg,rgba(205,127,50,.10),transparent 50%),var(--card)}
+
+  .hero{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .hero-logo{height:128px; width:auto; display:block}
+  .hero-sub{font-size:24px; font-weight:900; letter-spacing:.3px}
+  @media (max-width:480px){ .hero-logo{height:104px} .hero-sub{font-size:22px} }
+
+  .seg{display:inline-flex;border:1px solid #1f2a3a;border-radius:14px;overflow:hidden}
+  .seg button{padding:.5rem .9rem;font-weight:800}
+  .seg .on{background:#1a2331}
+
+  .chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:3px 10px;border-radius:9999px;border:1px solid rgba(148,163,184,.34);background:rgba(148,163,184,.12);color:#cbd5e1;font-weight:800;font-size:12px;line-height:1}
+
+  .city-line{font-size:1.15rem}
+  .team-name{font-size:21px !important}
+  @media (max-width:480px){ .team-name{font-size:17px !important} }
+  .score-value-ui{font-size:31px !important}
+  @media (max-width:480px){ .score-value-ui{font-size:25px !important} }
+  .score-value{ transform: translateX(-4px); }
+  @media (max-width:480px){ .score-value{ transform: translateX(-8px); } }
+
+  .rank-cell{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+  .medal-row{display:flex;align-items:center;gap:8px;margin:0 0 2px 0}
+  .medal-ico{width:17px;height:17px;border-radius:50%;box-shadow:inset 0 0 0 2px rgba(0,0,0,.18)}
+  .medal-g{background:radial-gradient(circle at 30% 30%, #fff6bf, #ffd700 42%, #c09a00 72%)}
+  .medal-s{background:radial-gradient(circle at 30% 30%, #ffffff, #c0c0c0 45%, #8a8a8a 75%)}
+  .medal-b{background:radial-gradient(circle at 30% 30%, #ffd1a3, #cd7f32 45%, #8b4f1f 75%)}
+  .medal-label{font-size:13px;font-weight:800;letter-spacing:.02em;color:#cbd5e1}
+
+  .ex-medal-row{display:flex;align-items:center;gap:8px;margin:0 0 2px 0}
+  .ex-medal-ico{width:18px;height:18px;border-radius:50%}
+  .ex-medal-g{background:radial-gradient(circle at 30% 30%, #fff6bf, #ffd700 42%)}
+  .ex-medal-s{background:radial-gradient(circle at 30% 30%, #ffffff, #c0c0c0 45%)}
+  .ex-medal-b{background:radial-gradient(circle at 30% 30%, #ffd1a3, #cd7f32 45%)}
+  .ex-medal-label{font-size:14px;font-weight:800;color:#cbd5e1;line-height:1;position:relative;top:-1px}
+  .ex-root{width:1080px;background:#0e141c;color:#fff;padding:28px 36px 28px;box-sizing:border-box}
+  .ex-header{position:relative; display:flex; align-items:center; justify-content:center; margin-bottom:12px}
+  .ex-date{position:absolute; right:0; top:0; font-size:22px; color:#94a3b8; font-weight:700}
+  .ex-hero{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .ex-logo{height:128px; width:auto; display:block}
+  .ex-sub{font-size:28px; font-weight:900; letter-spacing:.3px}
+  .ex-list{display:flex;flex-direction:column;gap:10px}
+  .ex-card{background:#131a24;border:1px solid #1f2a3a;border-radius:20px;padding:14px 18px}
+  .ex-grid{display:grid;grid-template-columns:72px 188px 1fr 210px;align-items:center;column-gap:14px}
+  .ex-grid .rank-cell{gap:5px}
+  .ex-rank-num{font-size:40px;font-weight:900;line-height:1;position:relative;top:-1px}
+  .ex-team-name{font-size:31px;font-weight:800}
+  .ex-city{font-size:20px;color:#94a3b8;margin-top:2px}
+  .ex-score-val{font-size:39px;font-weight:900;color:var(--accent); transform: translateX(-2px);}
+  .ex-score-diff{display:flex;align-items:baseline;gap:6px;margin-top:6px;font-size:20px}
+  .ex-up{color:#f87171;font-weight:800}
+  .ex-down{color:#60a5fa;font-weight:800}
+  .ex-same{color:#94a3b8;font-weight:700}
+
+  .dropdown-panel{position:absolute;z-index:50;width:100%;margin-top:.5rem;border-radius:12px;background:#0b111a;border:1px solid #1f2a3a;box-shadow:0 10px 25px rgba(0,0,0,.45)}
+  .region-item{display:flex;align-items:center;gap:.9rem;padding:.8rem 1rem;border-radius:.75rem;cursor:pointer}
+  .region-item:hover{background:#0f1723}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(1px);display:flex;align-items:center;justify-content:center;z-index:60}
+  .modal-card{background:#0b111a;border:1px solid #1f2a3a;border-radius:14px;width:min(92vw,560px);padding:20px}
+  .btn-strong{font-size:18px;padding:.65rem 1rem;border-radius:.75rem}
 </style>
 </head>
-<body>
-  <div class="wrap">
-    <div class="card">
-      <header>
-        <h1>BDR 팀 랭킹</h1>
-        <div class="sub" id="meta">서버 연결 확인 중…</div>
-      </header>
+<body class="min-h-screen text-white antialiased">
+<div class="max-w-6xl mx-auto px-4 py-6">
 
-      <div class="toolbar">
-        <input id="q" type="text" placeholder="팀명 검색 (예: STIZ)" />
-        <button id="btnReload">새로고침</button>
-        <button id="btnExport">CSV로 저장</button>
-        <label class="ghost" style="display:flex;align-items:center;gap:8px;">
-          <input id="auto" type="checkbox" />
-          자동 새로고침(5분)
-        </label>
-        <span id="count" class="pill">0개</span>
-      </div>
+  <div class="relative mb-4">
+    <div class="hero">
+      <img id="bdrLogoImg"
+           src="https://cdn.jsdelivr.net/gh/cobby8/BDR-ranking-d@c4eb7d9aeb7e32de9ab7bb2f2e9b84e23b470f4e/bdr-logo.png"
+           alt="BDR" class="hero-logo"
+           loading="eager" fetchpriority="high" decoding="async" crossorigin="anonymous" />
+      <div id="heroSub" class="hero-sub">일반부</div>
+    </div>
+    <span id="lastUpdated" class="absolute right-0 top-0 text-xl font-semibold muted"></span>
+  </div>
 
-      <table id="tb">
-        <thead>
-          <tr>
-            <th class="rank">순위</th>
-            <th class="sortable" data-key="teamName"><span>팀명</span></th>
-            <th class="pts sortable" data-key="totalPoints"><span>포인트</span></th>
-            <th class="change sortable" data-key="deltaPoints"><span>변동</span></th>
-            <th class="updated sortable" data-key="lastUpdated"><span>최종 업데이트</span></th>
-          </tr>
-        </thead>
-        <tbody id="rows">
-          <!-- rows go here -->
-        </tbody>
-      </table>
-
-      <div class="foot">
-        <div id="version">버전 확인 중…</div>
-        <div>※ 포인트 = 기본점수 × 디비전가중치 × 대회규모 × 시간가치(Y-0~Y-3)</div>
-      </div>
+  <div class="flex items-center justify-center mb-4">
+    <div class="seg" id="divTabs" role="tablist" aria-label="종별 선택">
+      <button data-div="d" class="on" role="tab" aria-selected="true">일반부</button>
+      <button data-div="u" role="tab" aria-selected="false">대학부</button>
     </div>
   </div>
 
+  <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 items-center">
+    <input id="search" type="search" placeholder="팀명/지역 검색…" class="control-lg sm:col-span-2 rounded-xl bg-[#0b111a] border border-[#1f2a3a] px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500" />
+    <div id="regionWrap" class="sm:col-span-2 relative">
+      <button id="regionToggle" class="control-lg w-full rounded-xl bg-[#0b111a] border border-[#1f2a3a] px-4 py-3 text-left flex items-center justify-between">
+        <span id="regionLabel" class="truncate control-label muted">지역 필터 (다중 선택)</span>
+        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#94a3b8" d="M7 10l5 5 5-5z"/></svg>
+      </button>
+      <div id="regionPanel" class="hidden dropdown-panel p-3" onclick="event.stopPropagation()">
+        <div id="regionList" class="flex flex-col gap-1"></div>
+        <div class="mt-4 flex items-center justify-between">
+          <button id="regionReset" class="btn-strong bg-[#0b111a] border border-[#1f2a3a]">전체 해제</button>
+          <button id="regionApply" class="btn-strong bg-indigo-600 hover:bg-indigo-500">적용</button>
+        </div>
+      </div>
+    </div>
+    <button id="btnExport" class="control-lg sm:col-span-1 rounded-xl bg-[#0b111a] border border-[#1f2a3a] px-4 py-3 hover:bg-[#131a24]">이미지 다운로드</button>
+  </div>
+  <p class="control-lg text-indigo-200/80 text-right -mt-1">
+    ※ 기본: <b>현재 화면 순번</b> 기준으로 10개씩 저장. (옵션에서 ‘절대 랭킹’도 선택 가능)
+  </p>
+
+  <div id="list" class="space-y-3"></div>
+  <div class="flex items-center justify-end">
+    <div class="muted text-sm">총 <span id="rowCount"></span>개 팀</div>
+  </div>
+
+  <div id="status" class="flex items-center gap-3 text-sm muted mt-3">
+    <div style="width:22px;height:22px;border-radius:9999px;border:3px solid #1f2a3a;border-top-color:#60a5fa;animation:spin .9s linear infinite"></div>
+    <span>데이터 불러오는 중…</span>
+  </div>
+  <div id="error" class="hidden text-sm text-red-400 mt-2"></div>
+  <div id="source" class="hidden text-xs muted mt-1"></div>
+</div>
+
+<div id="rangeModal" class="hidden"></div>
+
 <script>
-/** ⬇⬇⬇ 여기를 본인 Apps Script 웹앱 URL로 교체하세요 ⬇⬇⬇ */
-const API_BASE = 'https://script.google.com/macros/s/AKfycbyCWSg0aFZDBAIOs6lMuIxZFl9jzK2NPfOAitVlHMBaniWB70EX7p_sUbKyXoxrT9II/exec';
-/** 예: https://script.google.com/macros/s/AKfycb.../exec  (끝에 /exec 포함) */
+/** ⬇ 여기를 본인 GAS 웹앱 URL로 교체(…/exec) ⬇ */
+const API_BASE = 'REPLACE_WITH_GAS_WEBAPP_URL';
 
-let RAW = [];         // 원본 rows
-let VIEW = [];        // 필터/정렬 적용된 rows
-let sortKey = 'totalPoints';
-let sortDir = 'desc'; // 'asc' | 'desc'
-let autoTimer = null;
+const $ = s => document.querySelector(s);
+const z2 = n => String(n).padStart(2,'0');
+const formatDate = d => `${d.getFullYear()}년 ${z2(d.getMonth()+1)}월 ${z2(d.getDate())}일`;
+$('#lastUpdated').textContent = formatDate(new Date());
+const params = new URLSearchParams(location.search);
+const FAST = params.get('fast') === '1';
 
-function fmtPoints(n){
-  const v = Number(n||0);
-  return v.toLocaleString(undefined, {maximumFractionDigits:2});
+/* 종별(그룹) 정의: d=일반부, u=대학부 */
+const DIVS = {
+  d: { label:'일반부', group:'d' },
+  u: { label:'대학부', group:'u' },
+};
+const DEFAULT_DIV = 'd';
+let CUR_DIV = DIVS[params.get('div')] ? params.get('div') : DEFAULT_DIV;
+
+let BASE=[], FILTERED=[];
+let NATIONAL_RANK_MAP=null, LOCAL_RANK_MAP=null;
+
+const numOrNull = v => { const n = Number(v); return isNaN(n) ? null : n; };
+const byRankClass=r=>r===1?'top1':r===2?'top2':r===3?'top3':'';
+
+/* 전국/지역 랭킹 맵 */
+function buildNationalRankMap(){
+  const subset = BASE.slice().sort((a,b)=>(Number(a.rank)||Infinity)-(Number(b.rank)||Infinity));
+  const map = new Map();
+  subset.forEach((it,idx)=> map.set(`${it.team||''}\u0001${it.city||''}`, idx+1));
+  NATIONAL_RANK_MAP = map;
 }
-function fmtChange(delta, trend){
-  if(delta === null || delta === undefined || isNaN(delta)) return '<span class="trend-flat">—</span>';
-  const v = Number(delta);
-  if(v > 0)  return `<span class="trend-up">▲ +${fmtPoints(v)}</span>`;
-  if(v < 0)  return `<span class="trend-down">▼ ${fmtPoints(v)}</span>`;
-  return `<span class="trend-flat">—</span>`;
+function buildLocalRankMap(){
+  const subset = FILTERED.slice().sort((a,b)=>(Number(a.rank)||Infinity)-(Number(b.rank)||Infinity));
+  const map = new Map();
+  subset.forEach((it,idx)=> map.set(`${it.team||''}\u0001${it.city||''}`, idx+1));
+  LOCAL_RANK_MAP = map;
 }
-function medalBadge(rank){
-  if(rank===1) return '<span class="badge gold">🥇 1위</span>';
-  if(rank===2) return '<span class="badge silver">🥈 2위</span>';
-  if(rank===3) return '<span class="badge bronze">🥉 3위</span>';
-  return rank;
+function regionalBadge(team, city){
+  const key = `${team||''}\u0001${city||''}`;
+  const anyRegionSelected = selectedRegions.size > 0;
+  if(anyRegionSelected){
+    if(!LOCAL_RANK_MAP) return '';
+    const n = LOCAL_RANK_MAP.get(key);
+    return (typeof n==='number') ? `<span class="chip">지역${n}위</span>` : '';
+  }else{
+    if(!NATIONAL_RANK_MAP) return '';
+    const n = NATIONAL_RANK_MAP.get(key);
+    return (typeof n==='number') ? `<span class="chip">전국${n}위</span>` : '';
+  }
 }
 
-async function fetchJSON(url){
-  const res = await fetch(url, {method:'GET'});
-  if(!res.ok) throw new Error('HTTP '+res.status);
-  return await res.json();
+/* 메달/변화/점수 */
+function medalRow(rank, ex=false){
+  if(rank!==1 && rank!==2 && rank!==3) return '';
+  const rowCls = ex ? 'ex-medal-row' : 'medal-row';
+  const icoCls = ex ? 'ex-medal-ico' : 'medal-ico';
+  const labCls = ex ? 'ex-medal-label' : 'medal-label';
+  const t = rank===1?'g':(rank===2?'s':'b');
+  const label = rank===1?'GOLD':(rank===2?'SILVER':'BRONZE');
+  return `<div class="${rowCls}"><span class="${icoCls} ${ex?'ex-medal-':'medal-'}${t}"></span><span class="${labCls}">${label}</span></div>`;
+}
+function movementBadge(m){
+  const n=Number(m);
+  if(Number.isNaN(n) || n===0) return `<span class="badge badge-stay badge-pill move-badge"><i class="ico dash"></i></span>`;
+  if(n>0) return `<span class="badge badge-up badge-grid move-badge"><i class="ico plus"></i><span class="n num">${n}</span></span>`;
+  return `<span class="badge badge-down badge-grid move-badge"><i class="ico minus"></i><span class="n num">${Math.abs(n)}</span></span>`;
+}
+function scoreChangeBadge(val){
+  if(val===null || val===undefined || val==="") return `<span class="score-same">-</span>`;
+  const num=Number(val); if(Number.isNaN(num)) return `<span class="score-same">-</span>`;
+  const fixed = Math.abs(num).toFixed(1);
+  if(num>0) return `<span class="score-up">+${fixed}</span>`;
+  if(num<0) return `<span class="score-down">-${fixed}</span>`;
+  return `<span class="score-same">-</span>`;
 }
 
-async function loadAll(){
+/* 카드 */
+function cardHTML(it){
+  const scoreText = isNaN(Number(it.score)) ? (it.score??'') : Number(it.score).toFixed(1);
+  return `
+  <div class="card shadow-smooth rounded-2xl px-5 sm:px-7 py-5 ${byRankClass(it.rank)}">
+    <div class="grid grid-cols-12 items-center gap-4">
+      <div class="col-span-2 sm:col-span-1 rank-cell">
+        ${medalRow(it.rank)}
+        <div class="text-3xl sm:text-4xl font-extrabold num">${it.rank}</div>
+      </div>
+      <div class="col-span-3 sm:col-span-3 flex flex-col items-start gap-1.5">
+        ${movementBadge(it.move)}
+        ${regionalBadge(it.team, it.city)}
+      </div>
+      <div class="col-span-4 sm:col-span-5">
+        <div class="team-name font-semibold">${it.team}</div>
+        <div class="city-line muted mt-0.5">${it.city || ''}</div>
+      </div>
+      <div class="col-span-3 sm:col-span-3 text-right">
+        <div class="accent num score-value score-value-ui font-extrabold">${scoreText}</div>
+        <div class="mt-1.5 flex justify-end items-baseline gap-1.5">
+          <span class="text-xl num">${scoreChangeBadge(it.scoreChange)}</span>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* 지역 드롭다운 */
+const search = $('#search'), list = $('#list'), rowCount = $('#rowCount');
+const regionWrap=$('#regionWrap'), regionToggle=$('#regionToggle'), regionPanel=$('#regionPanel'), regionList=$('#regionList'), regionLabel=$('#regionLabel');
+const regionReset=$('#regionReset'), regionApply=$('#regionApply'); const selectedRegions=new Set();
+
+function regionOrderKey(name){
+  const n=(name||'').trim(), starts=p=>n.startsWith(p);
+  if(n==='서울'||starts('서울')) return 1;
+  if(n==='경기'||starts('경기')) return 2;
+  if(n==='인천'||starts('인천')) return 3;
+  if(n.includes('강원')) return 4;
+  if(n.includes('충청')||starts('충남')||starts('충북')||starts('대전')||starts('세종')) return 5;
+  if(n.includes('전라')||starts('전남')||starts('전북')||starts('광주')) return 6;
+  if(n.includes('경상')||starts('경남')||starts('경북')||starts('부산')||starts('대구')||starts('울산')) return 7;
+  if(n.includes('제주')) return 8;
+  return 9;
+}
+function buildRegionDropdown(){
+  let regions = Array.from(new Set(BASE.map(b => (b.city||'').trim()).filter(Boolean)));
+  if(!regions.length){
+    regionWrap.classList.add('hidden'); // 도시가 없으면 UI 숨김
+    return;
+  }
+  regionWrap.classList.remove('hidden');
+  regions.sort((a,b)=>{ const oa=regionOrderKey(a), ob=regionOrderKey(b); return oa===ob ? a.localeCompare(b,'ko') : oa-ob; });
+  regionList.innerHTML = regions.map(r => `
+    <label class="region-item">
+      <input type="checkbox" value="${r}" class="regionOpt">
+      <span>${r}</span>
+    </label>
+  `).join('');
+}
+function updateRegionLabel(){
+  const regs=[...selectedRegions];
+  regionLabel.textContent = regs.length===0 ? '지역 필터 (다중 선택)' : (regs.length<=2 ? regs.join(', ') : regs.slice(0,2).join(', ') + ` 외 ${regs.length-2}`);
+}
+function getFilteredByRegions(data){
+  if(selectedRegions.size===0) return data;
+  return data.filter(d => selectedRegions.has((d.city||'').trim()));
+}
+function applyFilter(){
+  const q=(search.value||'').toLowerCase();
+  const regionFiltered = getFilteredByRegions(BASE);
+  FILTERED = regionFiltered.filter(it => ((it.team||'')+' '+(it.city||'')).toLowerCase().includes(q));
+  if(selectedRegions.size > 0){ buildLocalRankMap(); } else { LOCAL_RANK_MAP = null; }
+  render();
+}
+function render(){
+  rowCount.textContent=FILTERED.length;
+  list.innerHTML = FILTERED.map(cardHTML).join('');
+}
+
+/* 드롭다운 동작 */
+regionToggle.addEventListener('click', e=>{ e.stopPropagation(); regionPanel.classList.toggle('hidden'); });
+document.addEventListener('click', ()=> regionPanel.classList.add('hidden'));
+regionPanel.addEventListener('click', e=>e.stopPropagation());
+regionReset.addEventListener('click', e=>{
+  e.preventDefault(); selectedRegions.clear();
+  regionList.querySelectorAll('.regionOpt').forEach(i=>i.checked=false); updateRegionLabel();
+});
+regionApply.addEventListener('click', e=>{ e.preventDefault(); applyFilter(); regionPanel.classList.add('hidden'); });
+regionList.addEventListener('change', e=>{
+  if(e.target.classList.contains('regionOpt')){
+    e.target.checked ? selectedRegions.add(e.target.value) : selectedRegions.delete(e.target.value);
+    updateRegionLabel();
+  }
+});
+search.addEventListener('input', applyFilter);
+
+/* 데이터 로드 (GAS) */
+async function fetchJSON(url){ const r = await fetch(url, {cache:'no-store', mode:'cors'}); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
+
+async function loadFromAPI(divKey){
+  const conf = DIVS[divKey]; if(!conf) throw new Error('알 수 없는 종별');
+  $('#status').classList.remove('hidden'); $('#error').classList.add('hidden'); $('#source').classList.add('hidden');
+
   try{
     // 리더보드
-    const lb = await fetchJSON(`${API_BASE}?path=leaderboard`);
-    RAW = Array.isArray(lb.rows) ? lb.rows.map(r => ({
-      teamName: r.teamName || r.teamname || '',
-      totalPoints: Number(r.totalPoints ?? r.totalpoints ?? 0),
-      deltaPoints: (r.deltaPoints ?? r.deltapoints),
-      trend: (r.trend || '').toUpperCase(),
-      lastUpdated: r.lastUpdated || r.lastupdated || '',
-    })) : [];
-    document.getElementById('count').textContent = `${RAW.length}개`;
+    const q = new URLSearchParams({ path:'leaderboard', group: conf.group }); // group은 백엔드가 지원하지 않아도 무시됨
+    const lb = await fetchJSON(`${API_BASE}?${q.toString()}`);
 
-    // 서버 상태/버전
-    const hv = await fetchJSON(`${API_BASE}?path=health`);
-    document.getElementById('meta').textContent =
-      `서버시간 ${new Date(hv.time||Date.now()).toLocaleString()} · ${lb.count||RAW.length}팀`;
-    document.getElementById('version').textContent = hv.version || '';
+    // 서버 상태
+    try{
+      const hv = await fetchJSON(`${API_BASE}?path=health`);
+      $('#lastUpdated').textContent = formatDate(new Date(hv.time||Date.now()));
+      $('#source').textContent = hv.version || '';
+      $('#source').classList.remove('hidden');
+    }catch(e){ /* health 실패는 무시 */ }
 
-    applyFilterSortRender();
+    // rows 매핑
+    const rows = Array.isArray(lb.rows) ? lb.rows : [];
+    // 순위 계산(서버에서 rank 제공 시 사용, 아니면 points 정렬)
+    rows.sort((a,b)=> Number(b.totalPoints||b.totalpoints||0) - Number(a.totalPoints||a.totalpoints||0));
+    const mapped = rows.map((r,idx)=>({
+      rank: Number(r.rank ?? (idx+1)),
+      team: r.teamName || r.teamname || '',
+      city: r.city || '',                               // 서버가 주지 않으면 ''
+      score: Number(r.totalPoints ?? r.totalpoints ?? 0),
+      move: Number(r.rankMove ?? 0),                    // 서버가 주지 않으면 0
+      scoreChange: Number(r.deltaPoints ?? r.deltapoints ?? 0) || 0
+    }));
+
+    BASE = mapped;
+    buildNationalRankMap();
+    buildRegionDropdown(); updateRegionLabel();
+    FILTERED=[...BASE]; LOCAL_RANK_MAP=null;
+    render();
   }catch(err){
     console.error(err);
-    document.getElementById('meta').textContent = '서버 연결 오류. URL 또는 권한을 확인하세요.';
+    const e=$('#error'); e.classList.remove('hidden'); e.textContent=`데이터 로드 오류: ${err.message}`;
+  }finally{
+    $('#status').classList.add('hidden');
   }
 }
 
-function applyFilterSortRender(){
-  const q = (document.getElementById('q').value || '').trim().toLowerCase();
-  VIEW = RAW.filter(r => r.teamName.toLowerCase().includes(q));
-
-  VIEW.sort((a,b)=>{
-    let av = a[sortKey], bv = b[sortKey];
-    // null/undefined 안전 처리
-    if(av===undefined || av===null) av = sortKey==='teamName' ? '' : -Infinity;
-    if(bv===undefined || bv===null) bv = sortKey==='teamName' ? '' : -Infinity;
-
-    if(sortKey==='teamName'){
-      return sortDir==='asc'
-        ? String(av).localeCompare(String(bv))
-        : String(bv).localeCompare(String(av));
-    }
-    if(sortKey==='lastUpdated'){
-      const ad = new Date(av||0).getTime(), bd = new Date(bv||0).getTime();
-      return sortDir==='asc' ? (ad-bd) : (bd-ad);
-    }
-    // 숫자(포인트/변동)
-    const na = Number(av), nb = Number(bv);
-    return sortDir==='asc' ? (na-nb) : (nb-na);
+/* 탭/제목 */
+function applyDivisionUI(divKey){
+  CUR_DIV = divKey;
+  const label = DIVS[divKey].label;
+  $('#heroSub').textContent = label;
+  document.title = `BDR 랭킹 - ${label}`;
+  document.querySelectorAll('#divTabs button').forEach(btn=>{
+    const on = btn.dataset.div === divKey;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-selected', on ? 'true':'false');
   });
-
-  renderTable(VIEW);
+  selectedRegions.clear(); updateRegionLabel(); search.value='';
+  LOCAL_RANK_MAP=null; $('#regionPanel').classList.add('hidden');
 }
-
-function renderTable(rows){
-  const tb = document.getElementById('rows');
-  tb.innerHTML = '';
-  rows.forEach((r, i)=>{
-    const rankCell = medalBadge(i+1);
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="rank">${rankCell}</td>
-      <td>${escapeHtml(r.teamName)}</td>
-      <td class="pts">${fmtPoints(r.totalPoints)}</td>
-      <td class="change">${fmtChange(r.deltaPoints, r.trend)}</td>
-      <td class="updated">${r.lastUpdated || ''}</td>
-    `;
-    tb.appendChild(tr);
-  });
-}
-
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m]));
-}
-
-function setSort(key){
-  if(sortKey===key){
-    sortDir = (sortDir==='asc'?'desc':'asc');
-  }else{
-    sortKey = key;
-    sortDir = (key==='teamName' ? 'asc' : 'desc');
-  }
-  applyFilterSortRender();
-}
-
-function exportCSV(){
-  const header = ['rank','teamName','totalPoints','deltaPoints','lastUpdated'];
-  const lines = [header.join(',')];
-  VIEW.forEach((r,i)=>{
-    const row = [
-      i+1,
-      `"${(r.teamName||'').replace(/"/g,'""')}"`,
-      r.totalPoints ?? '',
-      r.deltaPoints ?? '',
-      r.lastUpdated ?? ''
-    ];
-    lines.push(row.join(','));
-  });
-  const blob = new Blob([lines.join('\n')], {type:'text/csv;charset=utf-8;'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `bdr-team-ranking-${new Date().toISOString().slice(0,10)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-// 이벤트 바인딩
-document.getElementById('btnReload').addEventListener('click', loadAll);
-document.getElementById('btnExport').addEventListener('click', exportCSV);
-document.getElementById('q').addEventListener('input', applyFilterSortRender);
-document.querySelectorAll('th.sortable').forEach(th=>{
-  th.addEventListener('click', ()=> setSort(th.dataset.key));
-});
-document.getElementById('auto').addEventListener('change', (e)=>{
-  if(e.target.checked){
-    if(autoTimer) clearInterval(autoTimer);
-    autoTimer = setInterval(loadAll, 5*60*1000);
-  }else{
-    if(autoTimer) clearInterval(autoTimer);
-    autoTimer = null;
-  }
+document.getElementById('divTabs').addEventListener('click', (e)=>{
+  const btn = e.target.closest('button[data-div]'); if(!btn) return;
+  const nextDiv = btn.dataset.div; if(nextDiv === CUR_DIV) return;
+  const usp = new URLSearchParams(location.search);
+  usp.set('div', nextDiv);
+  if(FAST) usp.set('fast','1'); else usp.delete('fast');
+  history.replaceState(null,'', `${location.pathname}?${usp.toString()}`);
+  applyDivisionUI(nextDiv);
+  loadFromAPI(nextDiv);
 });
 
-// 초기 로드
-loadAll();
+/* 이미지 다운로드(기존 로직 유지) */
+document.getElementById('btnExport').addEventListener('click', openRangeModal);
+function buildRanges(mode){
+  if(mode==='rank'){
+    const maxRank = Math.max(...FILTERED.map(v=>Number(v.rank)||0), 0);
+    const lastGroup = Math.ceil(maxRank/10);
+    return Array.from({length:lastGroup},(_,g)=>({label:`절대 랭킹 ${g*10+1}–${(g+1)*10}위`, value:`${g*10+1}-${(g+1)*10}`}));
+  }else{
+    const n = FILTERED.length, lastGroup = Math.ceil(n/10);
+    return Array.from({length:lastGroup},(_,g)=>({label:`현재 목록 ${g*10+1}–${Math.min((g+1)*10,n)}팀`, value:`${g*10+1}-${Math.min((g+1)*10,n)}`}));
+  }
+}
+function openRangeModal(){
+  const modal = $('#rangeModal');
+  modal.innerHTML = `
+    <div class="modal-backdrop" role="dialog" aria-modal="true">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-semibold">이미지 다운로드</h2>
+          <button id="mdClose" class="btn-strong bg-[#0b111a] border border-[#1f2a3a]">닫기</button>
+        </div>
+        <div class="space-y-3">
+          <label class="text-sm muted">범위 기준</label>
+          <select id="mdMode" class="control-lg w-full rounded-lg bg-[#0b111a] border border-[#1f2a3a] px-3 py-2">
+            <option value="index" selected>현재 화면 순번</option>
+            <option value="rank">절대 랭킹 번호</option>
+          </select>
+          <label class="text-sm muted">저장 범위 (10개 단위)</label>
+          <select id="mdRange" class="control-lg w-full rounded-lg bg-[#0b111a] border border-[#1f2a3a] px-3 py-2"></select>
+        </div>
+        <div class="mt-4 flex items-center justify-end gap-2">
+          <button id="mdCancel" class="btn-strong bg-[#0b111a] border border-[#1f2a3a]">취소</button>
+          <button id="mdDownload" class="btn-strong bg-indigo-600 hover:bg-indigo-500">다운로드</button>
+        </div>
+      </div>
+    </div>`;
+  function repaint(){ const mode = document.getElementById('mdMode').value; const list = buildRanges(mode); const mdRange = document.getElementById('mdRange'); mdRange.innerHTML = list.map(r=>`<option value="${r.value}">${r.label}</option>`).join('') || `<option>저장할 항목이 없습니다</option>`; }
+  repaint(); modal.classList.remove('hidden');
+  modal.querySelector('#mdMode').onchange = repaint;
+  const close=()=>modal.classList.add('hidden');
+  modal.querySelector('.modal-backdrop').onclick=(e)=>{ if(e.target===e.currentTarget) close(); };
+  modal.querySelector('#mdClose').onclick=close;
+  modal.querySelector('#mdCancel').onclick=close;
+  modal.querySelector('#mdDownload').onclick=async ()=>{ const mode=document.getElementById('mdMode').value; const val=(document.getElementById('mdRange').value||'1-10'); await doExport(mode,val); close(); };
+}
+async function doExport(mode, rangeStr){
+  const [a,b]=(rangeStr||'1-10').split('-').map(n=>parseInt(n,10));
+  let subset = (mode==='rank')
+    ? FILTERED.filter(it => Number(it.rank)>=a && Number(it.rank)<=b).sort((x,y)=> Number(x.rank)-Number(y.rank))
+    : FILTERED.slice(a-1, b);
+  if(!subset.length){ alert('해당 범위에 팀이 없습니다. 범위를 바꿔주세요.'); return; }
+
+  const stage=document.createElement('div'); stage.className='ex-root'; stage.style.width='1080px'; stage.style.height='auto';
+  const logoSrc = ($('#bdrLogoImg')||{}).src || ''; const divLabel = DIVS[CUR_DIV].label;
+  stage.innerHTML=`
+    <div class="ex-header">
+      <div class="ex-hero">
+        ${logoSrc ? `<img src="${logoSrc}" class="ex-logo" crossorigin="anonymous" />` : `<div class="ex-sub">BDR RANKING</div>`}
+        <div class="ex-sub">${divLabel}</div>
+      </div>
+      <div class="ex-date">${$('#lastUpdated').textContent}</div>
+    </div>
+    <div id="exportList" class="ex-list"></div>`;
+  document.body.appendChild(stage);
+
+  $('#exportList').innerHTML = subset.map(it=>{
+    const n=Number(it.move);
+    const scoreText=isNaN(Number(it.score))?(it.score??''):Number(it.score).toFixed(1);
+    const diff=it.scoreChange;
+    const diffHTML=(diff===null || diff===undefined || diff==="" || Number(diff)===0)
+      ? `<span class="ex-same">-</span>`
+      : (Number(diff)>0
+          ? `<span class="ex-up num">+${Math.abs(Number(diff)).toFixed(1)}</span>`
+          : `<span class="ex-down num">-${Math.abs(Number(diff)).toFixed(1)}</span>`);
+    const moveHTML=Number.isNaN(n)||n===0
+      ? `<span class="badge badge-stay badge-pill ex-move-badge"><i class="ico dash"></i></span>`
+      : (n>0
+          ? `<span class="badge badge-up badge-grid ex-move-badge"><i class="ico plus"></i><span class="n num">${n}</span></span>`
+          : `<span class="badge badge-down badge-grid ex-move-badge"><i class="ico minus"></i><span class="n num">${Math.abs(n)}</span></span>`);
+    return `
+    <div class="ex-card ${byRankClass(it.rank)}">
+      <div class="ex-grid">
+        <div class="rank-cell">
+          ${medalRow(it.rank, true)}
+          <div class="ex-rank-num num">${it.rank}</div>
+        </div>
+        <div>${moveHTML}</div>
+        <div>
+          <div class="ex-team-name">${it.team}</div>
+          <div class="ex-city">${it.city||''}</div>
+        </div>
+        <div class="text-right">
+          <div class="ex-score-val num">${scoreText}</div>
+          <div class="ex-score-diff num">${diffHTML}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  try{
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    const neededHeight = stage.scrollHeight + 32; stage.style.height = neededHeight + 'px';
+    const canvas=await html2canvas(stage,{ backgroundColor:'#0e141c', useCORS:true, allowTaint:false, width:1080, height:neededHeight, windowWidth:1080, windowHeight:neededHeight, scale:2, scrollY: -window.scrollY });
+    const aTag=document.createElement('a');
+    aTag.download=`bdr_ranking_${CUR_DIV}_${mode==='rank'?'rank':'list'}_${a}-${b}_${new Date().toISOString().slice(0,10)}.png`;
+    aTag.href=canvas.toDataURL('image/png'); aTag.click();
+  }catch(e){ alert('이미지 저장 오류: '+e.message); }
+  finally{ stage.remove(); }
+}
+
+/* 부트스트랩 */
+(function init(){
+  const label = DIVS[CUR_DIV].label;
+  $('#heroSub').textContent = label;
+  document.title = `BDR 랭킹 - ${label}`;
+  document.querySelectorAll('#divTabs button').forEach(btn=>{
+    const on = btn.dataset.div === CUR_DIV;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-selected', on ? 'true':'false');
+  });
+  loadFromAPI(CUR_DIV);
+})();
 </script>
 </body>
 </html>
