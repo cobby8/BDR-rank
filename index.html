@@ -1,538 +1,675 @@
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>BDR 랭킹 - 통합판 v1.01 (GAS 연동)</title>
+/** =====================================================================
+ * BDR Ranking Backend (Team-Only, D3~D7 + Teams/Group + rankMove) v2.2.0
+ *
+ * ✅ 포함 기능
+ * - Router: doGet/doPost + path 파라미터
+ * - 모든 응답 JSON 통일(에러도 JSON)
+ * - 시트 보장/마이그레이션:
+ *    ensureSheets_(), ensureResultsHeader_(), ensureTeamsHeader_(), ensureIdsForResults_()
+ * - 랭킹 계산 공식(시간가치: Y-0=1, Y-1=0.5, Y-2=0.25, Y-3=0[소멸])
+ * - Settings 덮어쓰기: BASE_POINTS / DIV_WEIGHT / TIME_WEIGHT / SIZE_RULE
+ * - Division 별칭 매핑: 동호회 최강전/챌린저스/비기너스/뉴비/스타터스 → D3~D7
+ * - Teams 조인: city, group('d' 일반부 | 'u' 대학부), logoUrl(선택)
+ * - TeamRank 확장 컬럼: city, group, rankMove(이전 랭킹 대비 +상승/-하락/0유지)
+ *   · prevRank는 이전 TeamRank의 prevPoints로 그룹별 정렬하여 계산
+ * - TeamRankHistory: 스냅샷 저장(snapshotAt, teamName, totalPoints, group)
+ * - GET: health, leaderboard(팀; group=d|u 필터/랭킹 포함), results 조회
+ * - POST: upsertResults(배열), removeResults(by id), recompute
+ * - 메뉴: [BDR Ranking ▸ 재계산/헤더정렬/셀프테스트]
+ * - Cache: 그룹별 캐시 5분
+ * ===================================================================== */
 
-<!-- Tailwind & libs (이미지 저장용 html2canvas만 유지) -->
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+const VERSION = 'BDR-Ranking TeamOnly v2.2.0';
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@500;700;800;900&display=swap" rel="stylesheet">
+const CONF = {
+  SHEET_ID   : '', // 바인드형이면 비워두기. 독립형이면 시트 ID 입력.
+  TZ         : Session.getScriptTimeZone() || 'Asia/Seoul',
 
-<link rel="preload" as="image"
-  href="https://cdn.jsdelivr.net/gh/cobby8/BDR-ranking-d@c4eb7d9aeb7e32de9ab7bb2f2e9b84e23b470f4e/bdr-logo.png"
-  crossorigin />
+  TAB_SETTINGS : 'Settings',
+  TAB_RESULTS  : 'Results',
+  TAB_TEAMS    : 'Teams',
+  TAB_TEAM_R   : 'TeamRank',
+  TAB_TRHIST   : 'TeamRankHistory',
 
-<meta name="color-scheme" content="dark" />
-<style>
-  *{box-sizing:border-box}
-  :root{--surface:#0e141c;--card:#131a24;--muted:#94a3b8;--accent:#ffd54a}
-  html,body{background:var(--surface); font-family:"Noto Sans KR", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Apple SD Gothic Neo", Pretendard, sans-serif; font-size:17px; line-height:1.55; -webkit-font-smoothing:antialiased; text-rendering:geometricPrecision}
-  .card{background:var(--card); border:1px solid #1f2a3a}
-  .muted{color:var(--muted)} .accent{color:var(--accent)} .shadow-smooth{box-shadow:0 10px 30px rgba(0,0,0,.35)} .num{font-variant-numeric:tabular-nums}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  .control-lg{font-size:20px} .control-label{font-size:18px}
-  @media (max-width:480px){ .control-lg{font-size:18px} .control-label{font-size:16px} }
-
-  .move-badge{ transform:scale(.8); transform-origin:left center; }
-  .ex-move-badge{ transform:none; height:26px; padding:3px 10px; font-size:.95rem; line-height:1; }
-  .badge{border-radius:9999px;border:1px solid rgba(148,163,184,.34);line-height:1;font-weight:800;font-size:1rem}
-  .badge-grid{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:4px 12px}
-  .badge-pill{display:inline-flex;align-items:center;justify-content:center;height:28px;padding:4px 12px}
-  .badge-up{background:rgba(239,68,68,.18);color:#fca5a5;border-color:rgba(239,68,68,.55)}
-  .badge-down{background:rgba(59,130,246,.18);color:#93c5fd;border-color:rgba(59,130,246,.55)}
-  .badge-stay{background:rgba(148,163,184,.14);color:#cbd5e1;border-color:rgba(148,163,184,.34)}
-  .ico{width:16px;height:16px;position:relative;display:inline-block;vertical-align:middle}
-  .ico::before,.ico::after{content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:currentColor;border-radius:2px}
-  .ico.plus::before,.ico.minus::before,.ico.dash::before{width:14px;height:2px}
-  .ico.plus::after{width:2px;height:14px}
-
-  .score-up{color:#f87171;font-weight:700}
-  .score-down{color:#60a5fa;font-weight:700}
-  .score-same{color:#94a3b8;font-weight:600}
-
-  .top1{border:1.5px solid rgba(255,215,0,.55);background:linear-gradient(180deg,rgba(255,215,0,.10),transparent 50%),var(--card)}
-  .top2{border:1.5px solid rgba(192,192,192,.55);background:linear-gradient(180deg,rgba(192,192,192,.10),transparent 50%),var(--card)}
-  .top3{border:1.5px solid rgba(205,127,50,.55);background:linear-gradient(180deg,rgba(205,127,50,.10),transparent 50%),var(--card)}
-
-  .hero{display:flex;flex-direction:column;align-items:center;gap:8px}
-  .hero-logo{height:128px; width:auto; display:block}
-  .hero-sub{font-size:24px; font-weight:900; letter-spacing:.3px}
-  @media (max-width:480px){ .hero-logo{height:104px} .hero-sub{font-size:22px} }
-
-  .seg{display:inline-flex;border:1px solid #1f2a3a;border-radius:14px;overflow:hidden}
-  .seg button{padding:.5rem .9rem;font-weight:800}
-  .seg .on{background:#1a2331}
-
-  .chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:3px 10px;border-radius:9999px;border:1px solid rgba(148,163,184,.34);background:rgba(148,163,184,.12);color:#cbd5e1;font-weight:800;font-size:12px;line-height:1}
-
-  .city-line{font-size:1.15rem}
-  .team-name{font-size:21px !important}
-  @media (max-width:480px){ .team-name{font-size:17px !important} }
-  .score-value-ui{font-size:31px !important}
-  @media (max-width:480px){ .score-value-ui{font-size:25px !important} }
-  .score-value{ transform: translateX(-4px); }
-  @media (max-width:480px){ .score-value{ transform: translateX(-8px); } }
-
-  .rank-cell{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
-  .medal-row{display:flex;align-items:center;gap:8px;margin:0 0 2px 0}
-  .medal-ico{width:17px;height:17px;border-radius:50%;box-shadow:inset 0 0 0 2px rgba(0,0,0,.18)}
-  .medal-g{background:radial-gradient(circle at 30% 30%, #fff6bf, #ffd700 42%, #c09a00 72%)}
-  .medal-s{background:radial-gradient(circle at 30% 30%, #ffffff, #c0c0c0 45%, #8a8a8a 75%)}
-  .medal-b{background:radial-gradient(circle at 30% 30%, #ffd1a3, #cd7f32 45%, #8b4f1f 75%)}
-  .medal-label{font-size:13px;font-weight:800;letter-spacing:.02em;color:#cbd5e1}
-
-  .ex-medal-row{display:flex;align-items:center;gap:8px;margin:0 0 2px 0}
-  .ex-medal-ico{width:18px;height:18px;border-radius:50%}
-  .ex-medal-g{background:radial-gradient(circle at 30% 30%, #fff6bf, #ffd700 42%)}
-  .ex-medal-s{background:radial-gradient(circle at 30% 30%, #ffffff, #c0c0c0 45%)}
-  .ex-medal-b{background:radial-gradient(circle at 30% 30%, #ffd1a3, #cd7f32 45%)}
-  .ex-medal-label{font-size:14px;font-weight:800;color:#cbd5e1;line-height:1;position:relative;top:-1px}
-  .ex-root{width:1080px;background:#0e141c;color:#fff;padding:28px 36px 28px;box-sizing:border-box}
-  .ex-header{position:relative; display:flex; align-items:center; justify-content:center; margin-bottom:12px}
-  .ex-date{position:absolute; right:0; top:0; font-size:22px; color:#94a3b8; font-weight:700}
-  .ex-hero{display:flex;flex-direction:column;align-items:center;gap:6px}
-  .ex-logo{height:128px; width:auto; display:block}
-  .ex-sub{font-size:28px; font-weight:900; letter-spacing:.3px}
-  .ex-list{display:flex;flex-direction:column;gap:10px}
-  .ex-card{background:#131a24;border:1px solid #1f2a3a;border-radius:20px;padding:14px 18px}
-  .ex-grid{display:grid;grid-template-columns:72px 188px 1fr 210px;align-items:center;column-gap:14px}
-  .ex-grid .rank-cell{gap:5px}
-  .ex-rank-num{font-size:40px;font-weight:900;line-height:1;position:relative;top:-1px}
-  .ex-team-name{font-size:31px;font-weight:800}
-  .ex-city{font-size:20px;color:#94a3b8;margin-top:2px}
-  .ex-score-val{font-size:39px;font-weight:900;color:var(--accent); transform: translateX(-2px);}
-  .ex-score-diff{display:flex;align-items:baseline;gap:6px;margin-top:6px;font-size:20px}
-  .ex-up{color:#f87171;font-weight:800}
-  .ex-down{color:#60a5fa;font-weight:800}
-  .ex-same{color:#94a3b8;font-weight:700}
-
-  .dropdown-panel{position:absolute;z-index:50;width:100%;margin-top:.5rem;border-radius:12px;background:#0b111a;border:1px solid #1f2a3a;box-shadow:0 10px 25px rgba(0,0,0,.45)}
-  .region-item{display:flex;align-items:center;gap:.9rem;padding:.8rem 1rem;border-radius:.75rem;cursor:pointer}
-  .region-item:hover{background:#0f1723}
-  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(1px);display:flex;align-items:center;justify-content:center;z-index:60}
-  .modal-card{background:#0b111a;border:1px solid #1f2a3a;border-radius:14px;width:min(92vw,560px);padding:20px}
-  .btn-strong{font-size:18px;padding:.65rem 1rem;border-radius:.75rem}
-</style>
-</head>
-<body class="min-h-screen text-white antialiased">
-<div class="max-w-6xl mx-auto px-4 py-6">
-
-  <div class="relative mb-4">
-    <div class="hero">
-      <img id="bdrLogoImg"
-           src="https://cdn.jsdelivr.net/gh/cobby8/BDR-ranking-d@c4eb7d9aeb7e32de9ab7bb2f2e9b84e23b470f4e/bdr-logo.png"
-           alt="BDR" class="hero-logo"
-           loading="eager" fetchpriority="high" decoding="async" crossorigin="anonymous" />
-      <div id="heroSub" class="hero-sub">일반부</div>
-    </div>
-    <span id="lastUpdated" class="absolute right-0 top-0 text-xl font-semibold muted"></span>
-  </div>
-
-  <div class="flex items-center justify-center mb-4">
-    <div class="seg" id="divTabs" role="tablist" aria-label="종별 선택">
-      <button data-div="d" class="on" role="tab" aria-selected="true">일반부</button>
-      <button data-div="u" role="tab" aria-selected="false">대학부</button>
-    </div>
-  </div>
-
-  <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 items-center">
-    <input id="search" type="search" placeholder="팀명/지역 검색…" class="control-lg sm:col-span-2 rounded-xl bg-[#0b111a] border border-[#1f2a3a] px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500" />
-    <div id="regionWrap" class="sm:col-span-2 relative">
-      <button id="regionToggle" class="control-lg w-full rounded-xl bg-[#0b111a] border border-[#1f2a3a] px-4 py-3 text-left flex items-center justify-between">
-        <span id="regionLabel" class="truncate control-label muted">지역 필터 (다중 선택)</span>
-        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#94a3b8" d="M7 10l5 5 5-5z"/></svg>
-      </button>
-      <div id="regionPanel" class="hidden dropdown-panel p-3" onclick="event.stopPropagation()">
-        <div id="regionList" class="flex flex-col gap-1"></div>
-        <div class="mt-4 flex items-center justify-between">
-          <button id="regionReset" class="btn-strong bg-[#0b111a] border border-[#1f2a3a]">전체 해제</button>
-          <button id="regionApply" class="btn-strong bg-indigo-600 hover:bg-indigo-500">적용</button>
-        </div>
-      </div>
-    </div>
-    <button id="btnExport" class="control-lg sm:col-span-1 rounded-xl bg-[#0b111a] border border-[#1f2a3a] px-4 py-3 hover:bg-[#131a24]">이미지 다운로드</button>
-  </div>
-  <p class="control-lg text-indigo-200/80 text-right -mt-1">
-    ※ 기본: <b>현재 화면 순번</b> 기준으로 10개씩 저장. (옵션에서 ‘절대 랭킹’도 선택 가능)
-  </p>
-
-  <div id="list" class="space-y-3"></div>
-  <div class="flex items-center justify-end">
-    <div class="muted text-sm">총 <span id="rowCount"></span>개 팀</div>
-  </div>
-
-  <div id="status" class="flex items-center gap-3 text-sm muted mt-3">
-    <div style="width:22px;height:22px;border-radius:9999px;border:3px solid #1f2a3a;border-top-color:#60a5fa;animation:spin .9s linear infinite"></div>
-    <span>데이터 불러오는 중…</span>
-  </div>
-  <div id="error" class="hidden text-sm text-red-400 mt-2"></div>
-  <div id="source" class="hidden text-xs muted mt-1"></div>
-</div>
-
-<div id="rangeModal" class="hidden"></div>
-
-<script>
-/** ⬇ 여기를 본인 GAS 웹앱 URL로 교체(…/exec) ⬇ */
-const API_BASE = 'https://script.google.com/macros/s/AKfycbyCWSg0aFZDBAIOs6lMuIxZFl9jzK2NPfOAitVlHMBaniWB70EX7p_sUbKyXoxrT9II/exec';
-
-const $ = s => document.querySelector(s);
-const z2 = n => String(n).padStart(2,'0');
-const formatDate = d => `${d.getFullYear()}년 ${z2(d.getMonth()+1)}월 ${z2(d.getDate())}일`;
-$('#lastUpdated').textContent = formatDate(new Date());
-const params = new URLSearchParams(location.search);
-const FAST = params.get('fast') === '1';
-
-/* 종별(그룹) 정의: d=일반부, u=대학부 */
-const DIVS = {
-  d: { label:'일반부', group:'d' },
-  u: { label:'대학부', group:'u' },
+  CACHE_TTL_SEC: 300,  // 리더보드 캐시 5분
 };
-const DEFAULT_DIV = 'd';
-let CUR_DIV = DIVS[params.get('div')] ? params.get('div') : DEFAULT_DIV;
 
-let BASE=[], FILTERED=[];
-let NATIONAL_RANK_MAP=null, LOCAL_RANK_MAP=null;
+// 기본 상수(설정 없을 때)
+const DEFAULT_BASE_POINTS = { '우승':100, '준우승':70, '4강':50, '8강':25, '참가':10 };
+const DEFAULT_DIV_WEIGHTS = { D3:1.0, D4:0.75, D5:0.5, D6:0.25, D7:0.1 };
+// 시간가치: Y-3=0(소멸)
+const DEFAULT_TIME_WEIGHTS = { 'Y-0':1.0, 'Y-1':0.5, 'Y-2':0.25, 'Y-3':0.0 };
+// 기본 대회규모 룰(우선순위 위에서 아래로 적용)
+const DEFAULT_SIZE_RULES = [
+  { op:'>=', n:24, w:1.5 },
+  { op:'range', a:13, b:23, w:1.25 },
+  { op:'=', n:12, w:1.0 },
+  { op:'<=', n:11, w:0.5 },
+];
+// BDR 명칭 → 디비전 코드
+const NAME_TO_DIV = { '동호회 최강전':'D3', '챌린저스':'D4', '비기너스':'D5', '뉴비':'D6', '스타터스':'D7' };
 
-const numOrNull = v => { const n = Number(v); return isNaN(n) ? null : n; };
-const byRankClass=r=>r===1?'top1':r===2?'top2':r===3?'top3':'';
-
-/* 전국/지역 랭킹 맵 */
-function buildNationalRankMap(){
-  const subset = BASE.slice().sort((a,b)=>(Number(a.rank)||Infinity)-(Number(b.rank)||Infinity));
-  const map = new Map();
-  subset.forEach((it,idx)=> map.set(`${it.team||''}\u0001${it.city||''}`, idx+1));
-  NATIONAL_RANK_MAP = map;
+// ------------------ Utilities ------------------
+function _ss(){
+  return CONF.SHEET_ID ? SpreadsheetApp.openById(CONF.SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
 }
-function buildLocalRankMap(){
-  const subset = FILTERED.slice().sort((a,b)=>(Number(a.rank)||Infinity)-(Number(b.rank)||Infinity));
-  const map = new Map();
-  subset.forEach((it,idx)=> map.set(`${it.team||''}\u0001${it.city||''}`, idx+1));
-  LOCAL_RANK_MAP = map;
+function _getSheet(name){ return _ss().getSheetByName(name); }
+function _ensureSheet(name){ return _getSheet(name) || _ss().insertSheet(name); }
+function _nowISO(){ return Utilities.formatDate(new Date(), CONF.TZ, "yyyy-MM-dd'T'HH:mm:ssXXX"); }
+function _dateISO(d){
+  if(!(d instanceof Date)) d = new Date(d);
+  if(isNaN(d)) return '';
+  return Utilities.formatDate(d, CONF.TZ, 'yyyy-MM-dd');
 }
-function regionalBadge(team, city){
-  const key = `${team||''}\u0001${city||''}`;
-  const anyRegionSelected = selectedRegions.size > 0;
-  if(anyRegionSelected){
-    if(!LOCAL_RANK_MAP) return '';
-    const n = LOCAL_RANK_MAP.get(key);
-    return (typeof n==='number') ? `<span class="chip">지역${n}위</span>` : '';
-  }else{
-    if(!NATIONAL_RANK_MAP) return '';
-    const n = NATIONAL_RANK_MAP.get(key);
-    return (typeof n==='number') ? `<span class="chip">전국${n}위</span>` : '';
+function _uuid(){ return Utilities.getUuid(); }
+function _num(v){ var n = parseFloat(v); return isNaN(n)? null : n; }
+function _int(v){ var n = parseInt(v,10); return isNaN(n)? null : n; }
+function _lc(s){ return String(s||'').trim().toLowerCase(); }
+function _ok(payload){
+  var base = { ok:true };
+  for (var k in payload){ if(Object.prototype.hasOwnProperty.call(payload,k)) base[k]=payload[k]; }
+  return ContentService.createTextOutput(JSON.stringify(base)).setMimeType(ContentService.MimeType.JSON);
+}
+function _err(message, status, extra){
+  var out = { ok:false, error:String(message) };
+  if(extra){ for (var k in extra){ if(Object.prototype.hasOwnProperty.call(extra,k)) out[k]=extra[k]; } }
+  return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// 테이블 읽기(헤더 소문자화)
+function _readTable(name){
+  var sh = _getSheet(name); if(!sh) return [];
+  var vals = sh.getDataRange().getValues();
+  if(vals.length<2) return [];
+  var headers = vals[0].map(function(h){ return _lc(h); });
+  return vals.slice(1).filter(function(r){ return r.some(function(v){ return v!=='' && v!==null; }); }).map(function(row){
+    var obj={}; headers.forEach(function(h,i){ obj[h]=row[i]; }); return obj;
+  });
+}
+function _writeTable(name, headers, rows){
+  var sh = _ensureSheet(name);
+  sh.clearContents();
+  sh.getRange(1,1,1,headers.length).setValues([headers]);
+  if(rows && rows.length){
+    var vals = rows.map(function(r){ return headers.map(function(h){ return r[h]; }); });
+    sh.getRange(2,1,vals.length,headers.length).setValues(vals);
+  }
+}
+function _appendRows(name, headers, rows){
+  var sh = _ensureSheet(name);
+  if(sh.getLastRow()===0){ sh.getRange(1,1,1,headers.length).setValues([headers]); }
+  if(rows && rows.length){
+    var vals = rows.map(function(r){ return headers.map(function(h){ return r[h]; }); });
+    sh.getRange(sh.getLastRow()+1, 1, vals.length, headers.length).setValues(vals);
   }
 }
 
-/* 메달/변화/점수 */
-function medalRow(rank, ex=false){
-  if(rank!==1 && rank!==2 && rank!==3) return '';
-  const rowCls = ex ? 'ex-medal-row' : 'medal-row';
-  const icoCls = ex ? 'ex-medal-ico' : 'medal-ico';
-  const labCls = ex ? 'ex-medal-label' : 'medal-label';
-  const t = rank===1?'g':(rank===2?'s':'b');
-  const label = rank===1?'GOLD':(rank===2?'SILVER':'BRONZE');
-  return `<div class="${rowCls}"><span class="${icoCls} ${ex?'ex-medal-':'medal-'}${t}"></span><span class="${labCls}">${label}</span></div>`;
+// ------------------ Ensure / Migrations ------------------
+function ensureSheets_(){
+  ensureResultsHeader_();
+  ensureTeamsHeader_();
+  if(!_getSheet(CONF.TAB_TEAM_R)){
+    _writeTable(CONF.TAB_TEAM_R, ['teamName','totalPoints','lastUpdated','prevPoints','deltaPoints','trend','city','group','rankMove'], []);
+  }
+  if(!_getSheet(CONF.TAB_TRHIST)){
+    _writeTable(CONF.TAB_TRHIST, ['snapshotAt','teamName','totalPoints','group'], []);
+  }
 }
-function movementBadge(m){
-  const n=Number(m);
-  if(Number.isNaN(n) || n===0) return `<span class="badge badge-stay badge-pill move-badge"><i class="ico dash"></i></span>`;
-  if(n>0) return `<span class="badge badge-up badge-grid move-badge"><i class="ico plus"></i><span class="n num">${n}</span></span>`;
-  return `<span class="badge badge-down badge-grid move-badge"><i class="ico minus"></i><span class="n num">${Math.abs(n)}</span></span>`;
-}
-function scoreChangeBadge(val){
-  if(val===null || val===undefined || val==="") return `<span class="score-same">-</span>`;
-  const num=Number(val); if(Number.isNaN(num)) return `<span class="score-same">-</span>`;
-  const fixed = Math.abs(num).toFixed(1);
-  if(num>0) return `<span class="score-up">+${fixed}</span>`;
-  if(num<0) return `<span class="score-down">-${fixed}</span>`;
-  return `<span class="score-same">-</span>`;
-}
-
-/* 카드 */
-function cardHTML(it){
-  const scoreText = isNaN(Number(it.score)) ? (it.score??'') : Number(it.score).toFixed(1);
-  return `
-  <div class="card shadow-smooth rounded-2xl px-5 sm:px-7 py-5 ${byRankClass(it.rank)}">
-    <div class="grid grid-cols-12 items-center gap-4">
-      <div class="col-span-2 sm:col-span-1 rank-cell">
-        ${medalRow(it.rank)}
-        <div class="text-3xl sm:text-4xl font-extrabold num">${it.rank}</div>
-      </div>
-      <div class="col-span-3 sm:col-span-3 flex flex-col items-start gap-1.5">
-        ${movementBadge(it.move)}
-        ${regionalBadge(it.team, it.city)}
-      </div>
-      <div class="col-span-4 sm:col-span-5">
-        <div class="team-name font-semibold">${it.team}</div>
-        <div class="city-line muted mt-0.5">${it.city || ''}</div>
-      </div>
-      <div class="col-span-3 sm:col-span-3 text-right">
-        <div class="accent num score-value score-value-ui font-extrabold">${scoreText}</div>
-        <div class="mt-1.5 flex justify-end items-baseline gap-1.5">
-          <span class="text-xl num">${scoreChangeBadge(it.scoreChange)}</span>
-        </div>
-      </div>
-    </div>
-  </div>`;
-}
-
-/* 지역 드롭다운 */
-const search = $('#search'), list = $('#list'), rowCount = $('#rowCount');
-const regionWrap=$('#regionWrap'), regionToggle=$('#regionToggle'), regionPanel=$('#regionPanel'), regionList=$('#regionList'), regionLabel=$('#regionLabel');
-const regionReset=$('#regionReset'), regionApply=$('#regionApply'); const selectedRegions=new Set();
-
-function regionOrderKey(name){
-  const n=(name||'').trim(), starts=p=>n.startsWith(p);
-  if(n==='서울'||starts('서울')) return 1;
-  if(n==='경기'||starts('경기')) return 2;
-  if(n==='인천'||starts('인천')) return 3;
-  if(n.includes('강원')) return 4;
-  if(n.includes('충청')||starts('충남')||starts('충북')||starts('대전')||starts('세종')) return 5;
-  if(n.includes('전라')||starts('전남')||starts('전북')||starts('광주')) return 6;
-  if(n.includes('경상')||starts('경남')||starts('경북')||starts('부산')||starts('대구')||starts('울산')) return 7;
-  if(n.includes('제주')) return 8;
-  return 9;
-}
-function buildRegionDropdown(){
-  let regions = Array.from(new Set(BASE.map(b => (b.city||'').trim()).filter(Boolean)));
-  if(!regions.length){
-    regionWrap.classList.add('hidden'); // 도시가 없으면 UI 숨김
+function ensureResultsHeader_(){
+  var HEADERS = ['id','date','tourId','tourName','division','teams','stage','teamName','entrySize','createdAt','updatedAt'];
+  var sh = _ensureSheet(CONF.TAB_RESULTS);
+  if(sh.getLastRow()===0){
+    sh.getRange(1,1,1,HEADERS.length).setValues([HEADERS]);
     return;
   }
-  regionWrap.classList.remove('hidden');
-  regions.sort((a,b)=>{ const oa=regionOrderKey(a), ob=regionOrderKey(b); return oa===ob ? a.localeCompare(b,'ko') : oa-ob; });
-  regionList.innerHTML = regions.map(r => `
-    <label class="region-item">
-      <input type="checkbox" value="${r}" class="regionOpt">
-      <span>${r}</span>
-    </label>
-  `).join('');
-}
-function updateRegionLabel(){
-  const regs=[...selectedRegions];
-  regionLabel.textContent = regs.length===0 ? '지역 필터 (다중 선택)' : (regs.length<=2 ? regs.join(', ') : regs.slice(0,2).join(', ') + ` 외 ${regs.length-2}`);
-}
-function getFilteredByRegions(data){
-  if(selectedRegions.size===0) return data;
-  return data.filter(d => selectedRegions.has((d.city||'').trim()));
-}
-function applyFilter(){
-  const q=(search.value||'').toLowerCase();
-  const regionFiltered = getFilteredByRegions(BASE);
-  FILTERED = regionFiltered.filter(it => ((it.team||'')+' '+(it.city||'')).toLowerCase().includes(q));
-  if(selectedRegions.size > 0){ buildLocalRankMap(); } else { LOCAL_RANK_MAP = null; }
-  render();
-}
-function render(){
-  rowCount.textContent=FILTERED.length;
-  list.innerHTML = FILTERED.map(cardHTML).join('');
-}
-
-/* 드롭다운 동작 */
-regionToggle.addEventListener('click', e=>{ e.stopPropagation(); regionPanel.classList.toggle('hidden'); });
-document.addEventListener('click', ()=> regionPanel.classList.add('hidden'));
-regionPanel.addEventListener('click', e=>e.stopPropagation());
-regionReset.addEventListener('click', e=>{
-  e.preventDefault(); selectedRegions.clear();
-  regionList.querySelectorAll('.regionOpt').forEach(i=>i.checked=false); updateRegionLabel();
-});
-regionApply.addEventListener('click', e=>{ e.preventDefault(); applyFilter(); regionPanel.classList.add('hidden'); });
-regionList.addEventListener('change', e=>{
-  if(e.target.classList.contains('regionOpt')){
-    e.target.checked ? selectedRegions.add(e.target.value) : selectedRegions.delete(e.target.value);
-    updateRegionLabel();
-  }
-});
-search.addEventListener('input', applyFilter);
-
-/* 데이터 로드 (GAS) */
-async function fetchJSON(url){ const r = await fetch(url, {cache:'no-store', mode:'cors'}); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
-
-async function loadFromAPI(divKey){
-  const conf = DIVS[divKey]; if(!conf) throw new Error('알 수 없는 종별');
-  $('#status').classList.remove('hidden'); $('#error').classList.add('hidden'); $('#source').classList.add('hidden');
-
-  try{
-    // 리더보드
-    const q = new URLSearchParams({ path:'leaderboard', group: conf.group }); // group은 백엔드가 지원하지 않아도 무시됨
-    const lb = await fetchJSON(`${API_BASE}?${q.toString()}`);
-
-    // 서버 상태
-    try{
-      const hv = await fetchJSON(`${API_BASE}?path=health`);
-      $('#lastUpdated').textContent = formatDate(new Date(hv.time||Date.now()));
-      $('#source').textContent = hv.version || '';
-      $('#source').classList.remove('hidden');
-    }catch(e){ /* health 실패는 무시 */ }
-
-    // rows 매핑
-    const rows = Array.isArray(lb.rows) ? lb.rows : [];
-    // 순위 계산(서버에서 rank 제공 시 사용, 아니면 points 정렬)
-    rows.sort((a,b)=> Number(b.totalPoints||b.totalpoints||0) - Number(a.totalPoints||a.totalpoints||0));
-    const mapped = rows.map((r,idx)=>({
-      rank: Number(r.rank ?? (idx+1)),
-      team: r.teamName || r.teamname || '',
-      city: r.city || '',                               // 서버가 주지 않으면 ''
-      score: Number(r.totalPoints ?? r.totalpoints ?? 0),
-      move: Number(r.rankMove ?? 0),                    // 서버가 주지 않으면 0
-      scoreChange: Number(r.deltaPoints ?? r.deltapoints ?? 0) || 0
-    }));
-
-    BASE = mapped;
-    buildNationalRankMap();
-    buildRegionDropdown(); updateRegionLabel();
-    FILTERED=[...BASE]; LOCAL_RANK_MAP=null;
-    render();
-  }catch(err){
-    console.error(err);
-    const e=$('#error'); e.classList.remove('hidden'); e.textContent=`데이터 로드 오류: ${err.message}`;
-  }finally{
-    $('#status').classList.add('hidden');
-  }
-}
-
-/* 탭/제목 */
-function applyDivisionUI(divKey){
-  CUR_DIV = divKey;
-  const label = DIVS[divKey].label;
-  $('#heroSub').textContent = label;
-  document.title = `BDR 랭킹 - ${label}`;
-  document.querySelectorAll('#divTabs button').forEach(btn=>{
-    const on = btn.dataset.div === divKey;
-    btn.classList.toggle('on', on);
-    btn.setAttribute('aria-selected', on ? 'true':'false');
+  var vals = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+  var have = vals.map(function(v){ return _lc(v); });
+  var needRewrite = false;
+  var normalized = HEADERS.map(function(h){
+    var idx = have.indexOf(_lc(h));
+    if(idx===-1){ needRewrite = true; }
+    return h;
   });
-  selectedRegions.clear(); updateRegionLabel(); search.value='';
-  LOCAL_RANK_MAP=null; $('#regionPanel').classList.add('hidden');
+  if(needRewrite){
+    var data = sh.getRange(2,1,Math.max(0, sh.getLastRow()-1), sh.getLastColumn()).getValues();
+    sh.clearContents();
+    sh.getRange(1,1,1,normalized.length).setValues([normalized]);
+    if(data.length){
+      var oldMap = {};
+      have.forEach(function(h,idx){ oldMap[h] = idx; });
+      var remapped = data.map(function(row){
+        return normalized.map(function(h){
+          var i = oldMap[_lc(h)];
+          return (i!=null && i>=0 && i<row.length) ? row[i] : '';
+        });
+      });
+      sh.getRange(2,1,remapped.length,normalized.length).setValues(remapped);
+    }
+  }
+  ensureIdsForResults_();
 }
-document.getElementById('divTabs').addEventListener('click', (e)=>{
-  const btn = e.target.closest('button[data-div]'); if(!btn) return;
-  const nextDiv = btn.dataset.div; if(nextDiv === CUR_DIV) return;
-  const usp = new URLSearchParams(location.search);
-  usp.set('div', nextDiv);
-  if(FAST) usp.set('fast','1'); else usp.delete('fast');
-  history.replaceState(null,'', `${location.pathname}?${usp.toString()}`);
-  applyDivisionUI(nextDiv);
-  loadFromAPI(nextDiv);
-});
-
-/* 이미지 다운로드(기존 로직 유지) */
-document.getElementById('btnExport').addEventListener('click', openRangeModal);
-function buildRanges(mode){
-  if(mode==='rank'){
-    const maxRank = Math.max(...FILTERED.map(v=>Number(v.rank)||0), 0);
-    const lastGroup = Math.ceil(maxRank/10);
-    return Array.from({length:lastGroup},(_,g)=>({label:`절대 랭킹 ${g*10+1}–${(g+1)*10}위`, value:`${g*10+1}-${(g+1)*10}`}));
+function ensureTeamsHeader_(){
+  var HEADERS = ['teamName','city','group','logoUrl'];
+  var sh = _ensureSheet(CONF.TAB_TEAMS);
+  if(sh.getLastRow()===0){
+    sh.getRange(1,1,1,HEADERS.length).setValues([HEADERS]);
   }else{
-    const n = FILTERED.length, lastGroup = Math.ceil(n/10);
-    return Array.from({length:lastGroup},(_,g)=>({label:`현재 목록 ${g*10+1}–${Math.min((g+1)*10,n)}팀`, value:`${g*10+1}-${Math.min((g+1)*10,n)}`}));
+    // 헤더 유효성만 간단 체크
+    var vals = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(function(v){ return _lc(v); });
+    var need = ['teamname','city','group','logourl'];
+    var ok = true; for(var i=0;i<need.length;i++){ if(vals.indexOf(need[i])===-1){ ok=false; break; } }
+    if(!ok){
+      var data = sh.getRange(2,1,Math.max(0, sh.getLastRow()-1), sh.getLastColumn()).getValues();
+      sh.clearContents();
+      sh.getRange(1,1,1,HEADERS.length).setValues([HEADERS]);
+      if(data.length){ sh.getRange(2,1,data.length,Math.min(HEADERS.length, data[0].length)).setValues(data); }
+    }
   }
 }
-function openRangeModal(){
-  const modal = $('#rangeModal');
-  modal.innerHTML = `
-    <div class="modal-backdrop" role="dialog" aria-modal="true">
-      <div class="modal-card" onclick="event.stopPropagation()">
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="text-lg font-semibold">이미지 다운로드</h2>
-          <button id="mdClose" class="btn-strong bg-[#0b111a] border border-[#1f2a3a]">닫기</button>
-        </div>
-        <div class="space-y-3">
-          <label class="text-sm muted">범위 기준</label>
-          <select id="mdMode" class="control-lg w-full rounded-lg bg-[#0b111a] border border-[#1f2a3a] px-3 py-2">
-            <option value="index" selected>현재 화면 순번</option>
-            <option value="rank">절대 랭킹 번호</option>
-          </select>
-          <label class="text-sm muted">저장 범위 (10개 단위)</label>
-          <select id="mdRange" class="control-lg w-full rounded-lg bg-[#0b111a] border border-[#1f2a3a] px-3 py-2"></select>
-        </div>
-        <div class="mt-4 flex items-center justify-end gap-2">
-          <button id="mdCancel" class="btn-strong bg-[#0b111a] border border-[#1f2a3a]">취소</button>
-          <button id="mdDownload" class="btn-strong bg-indigo-600 hover:bg-indigo-500">다운로드</button>
-        </div>
-      </div>
-    </div>`;
-  function repaint(){ const mode = document.getElementById('mdMode').value; const list = buildRanges(mode); const mdRange = document.getElementById('mdRange'); mdRange.innerHTML = list.map(r=>`<option value="${r.value}">${r.label}</option>`).join('') || `<option>저장할 항목이 없습니다</option>`; }
-  repaint(); modal.classList.remove('hidden');
-  modal.querySelector('#mdMode').onchange = repaint;
-  const close=()=>modal.classList.add('hidden');
-  modal.querySelector('.modal-backdrop').onclick=(e)=>{ if(e.target===e.currentTarget) close(); };
-  modal.querySelector('#mdClose').onclick=close;
-  modal.querySelector('#mdCancel').onclick=close;
-  modal.querySelector('#mdDownload').onclick=async ()=>{ const mode=document.getElementById('mdMode').value; const val=(document.getElementById('mdRange').value||'1-10'); await doExport(mode,val); close(); };
+function ensureIdsForResults_(){
+  var sh = _getSheet(CONF.TAB_RESULTS);
+  if(!sh) return;
+  var headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(function(v){ return _lc(v); });
+  function idx(name){ return headers.indexOf(_lc(name)); }
+  var r = sh.getDataRange().getValues();
+  if(r.length<2) return;
+  var rows = r.slice(1);
+  var now = _nowISO();
+
+  var colId        = idx('id');
+  var colDiv       = idx('division');
+  var colCreatedAt = idx('createdat');
+  var colUpdatedAt = idx('updatedat');
+
+  var dirty = false;
+  rows.forEach(function(row){
+    if(!row[colId]){ row[colId] = _uuid(); dirty = true; }
+    if(!row[colCreatedAt]){ row[colCreatedAt] = now; dirty = true; }
+    row[colUpdatedAt] = now; dirty = true;
+
+    if(row[colDiv]){
+      var div = _normalizeDivision(row[colDiv]);
+      if(div !== row[colDiv]){ row[colDiv] = div; dirty = true; }
+    }
+  });
+  if(dirty){
+    sh.getRange(2,1,rows.length,headers.length).setValues(rows);
+  }
 }
-async function doExport(mode, rangeStr){
-  const [a,b]=(rangeStr||'1-10').split('-').map(n=>parseInt(n,10));
-  let subset = (mode==='rank')
-    ? FILTERED.filter(it => Number(it.rank)>=a && Number(it.rank)<=b).sort((x,y)=> Number(x.rank)-Number(y.rank))
-    : FILTERED.slice(a-1, b);
-  if(!subset.length){ alert('해당 범위에 팀이 없습니다. 범위를 바꿔주세요.'); return; }
 
-  const stage=document.createElement('div'); stage.className='ex-root'; stage.style.width='1080px'; stage.style.height='auto';
-  const logoSrc = ($('#bdrLogoImg')||{}).src || ''; const divLabel = DIVS[CUR_DIV].label;
-  stage.innerHTML=`
-    <div class="ex-header">
-      <div class="ex-hero">
-        ${logoSrc ? `<img src="${logoSrc}" class="ex-logo" crossorigin="anonymous" />` : `<div class="ex-sub">BDR RANKING</div>`}
-        <div class="ex-sub">${divLabel}</div>
-      </div>
-      <div class="ex-date">${$('#lastUpdated').textContent}</div>
-    </div>
-    <div id="exportList" class="ex-list"></div>`;
-  document.body.appendChild(stage);
+// ------------------ Settings ------------------
+function _loadSettings(){
+  var out = {
+    basePoints : JSON.parse(JSON.stringify(DEFAULT_BASE_POINTS)),
+    divWeights : JSON.parse(JSON.stringify(DEFAULT_DIV_WEIGHTS)),
+    timeWeights: JSON.parse(JSON.stringify(DEFAULT_TIME_WEIGHTS)),
+    sizeRules  : JSON.parse(JSON.stringify(DEFAULT_SIZE_RULES)),
+  };
+  var rows = _readTable(CONF.TAB_SETTINGS);
+  rows.forEach(function(r){
+    var key = _lc(r['key']);
+    var v1  = String(r['value'] != null ? r['value'] : '').trim();
+    var v2  = String(r['value2'] != null ? r['value2'] : '').trim();
+    if(!key) return;
 
-  $('#exportList').innerHTML = subset.map(it=>{
-    const n=Number(it.move);
-    const scoreText=isNaN(Number(it.score))?(it.score??''):Number(it.score).toFixed(1);
-    const diff=it.scoreChange;
-    const diffHTML=(diff===null || diff===undefined || diff==="" || Number(diff)===0)
-      ? `<span class="ex-same">-</span>`
-      : (Number(diff)>0
-          ? `<span class="ex-up num">+${Math.abs(Number(diff)).toFixed(1)}</span>`
-          : `<span class="ex-down num">-${Math.abs(Number(diff)).toFixed(1)}</span>`);
-    const moveHTML=Number.isNaN(n)||n===0
-      ? `<span class="badge badge-stay badge-pill ex-move-badge"><i class="ico dash"></i></span>`
-      : (n>0
-          ? `<span class="badge badge-up badge-grid ex-move-badge"><i class="ico plus"></i><span class="n num">${n}</span></span>`
-          : `<span class="badge badge-down badge-grid ex-move-badge"><i class="ico minus"></i><span class="n num">${Math.abs(n)}</span></span>`);
-    return `
-    <div class="ex-card ${byRankClass(it.rank)}">
-      <div class="ex-grid">
-        <div class="rank-cell">
-          ${medalRow(it.rank, true)}
-          <div class="ex-rank-num num">${it.rank}</div>
-        </div>
-        <div>${moveHTML}</div>
-        <div>
-          <div class="ex-team-name">${it.team}</div>
-          <div class="ex-city">${it.city||''}</div>
-        </div>
-        <div class="text-right">
-          <div class="ex-score-val num">${scoreText}</div>
-          <div class="ex-score-diff num">${diffHTML}</div>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
+    if(key==='base_points' && v1){
+      var n1 = _num(v2); if(n1!=null) out.basePoints[v1]=n1;
+    }else if(key==='div_weight' && v1){
+      var n2 = _num(v2); if(n2!=null) out.divWeights[v1]=n2;
+    }else if(key==='time_weight' && v1){
+      var n3 = _num(v2); if(n3!=null) out.timeWeights[v1.toUpperCase()]=n3;
+    }else if(key==='size_rule' && v1){
+      var w = _num(v2); if(w==null) return;
+      var rule = parseSizeRule_(v1, w);
+      if(rule) out.sizeRules.push(rule);
+    }
+  });
+  return out;
+}
+function parseSizeRule_(expr, w){
+  var s = String(expr).trim();
+  if(/^>=\s*\d+$/.test(s)){ return {op:'>=', n:_int(s.replace('>=','')), w:w}; }
+  if(/^<=\s*\d+$/.test(s)){ return {op:'<=', n:_int(s.replace('<=','')), w:w}; }
+  if(/^=\s*\d+$/.test(s)) { return {op:'=',  n:_int(s.replace('=','')),  w:w}; }
+  if(/^\d+\s*-\s*\d+$/.test(s)){
+    var parts = s.split('-');
+    var a = _int(parts[0]);
+    var b = _int(parts[1]);
+    return {op:'range', a:a, b:b, w:w};
+  }
+  return null;
+}
+
+// ------------------ Rule helpers ------------------
+function _normalizeDivision(divStr){
+  var raw = String(divStr||'').trim();
+  if(!raw) return '';
+  if(DEFAULT_DIV_WEIGHTS[raw]!=null) return raw; // 이미 D3~D7
+  return NAME_TO_DIV[raw] || raw;
+}
+function _basePoints(stage, sets){
+  var s = String(stage||'').trim();
+  return (sets.basePoints[s]!=null) ? Number(sets.basePoints[s]) : 0;
+}
+function _divisionWeight(divStr, sets){
+  var div = _normalizeDivision(divStr);
+  return sets.divWeights[div]!=null ? Number(sets.divWeights[div]) : 1.0;
+}
+function _sizeWeight(nTeams, sets){
+  var t = _int(nTeams);
+  if(t==null) return 1.0;
+  var rules = (sets.sizeRules && sets.sizeRules.length) ? sets.sizeRules : DEFAULT_SIZE_RULES;
+  for(var i=0;i<rules.length;i++){
+    var r = rules[i];
+    if(r.op==='>=' && t>=r.n) return r.w;
+    if(r.op==='range' && t>=r.a && t<=r.b) return r.w;
+    if(r.op==='=' && t===r.n) return r.w;
+    if(r.op==='<=' && t<=r.n) return r.w;
+  }
+  return 1.0;
+}
+function _timeWeight(dateStr, sets){
+  var def0 = (sets.timeWeights && sets.timeWeights['Y-0']!=null) ? sets.timeWeights['Y-0'] : 1.0;
+  var def1 = (sets.timeWeights && sets.timeWeights['Y-1']!=null) ? sets.timeWeights['Y-1'] : 0.5;
+  var def2 = (sets.timeWeights && sets.timeWeights['Y-2']!=null) ? sets.timeWeights['Y-2'] : 0.25;
+  var def3 = (sets.timeWeights && sets.timeWeights['Y-3']!=null) ? sets.timeWeights['Y-3'] : 0.0;
+
+  if(!dateStr) return def0;
+  var d = new Date(dateStr);
+  if(isNaN(d))  return def0;
+  var now = new Date();
+  var diff = now.getFullYear() - d.getFullYear();
+  if(diff<=0) return def0;
+  if(diff===1) return def1;
+  if(diff===2) return def2;
+  return def3; // 소멸
+}
+
+// ------------------ Core: Recompute ------------------
+function recomputeRanking_(){
+  ensureSheets_();
+  var lock = LockService.getScriptLock();
+  lock.tryLock(3000);
 
   try{
-    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
-    const neededHeight = stage.scrollHeight + 32; stage.style.height = neededHeight + 'px';
-    const canvas=await html2canvas(stage,{ backgroundColor:'#0e141c', useCORS:true, allowTaint:false, width:1080, height:neededHeight, windowWidth:1080, windowHeight:neededHeight, scale:2, scrollY: -window.scrollY });
-    const aTag=document.createElement('a');
-    aTag.download=`bdr_ranking_${CUR_DIV}_${mode==='rank'?'rank':'list'}_${a}-${b}_${new Date().toISOString().slice(0,10)}.png`;
-    aTag.href=canvas.toDataURL('image/png'); aTag.click();
-  }catch(e){ alert('이미지 저장 오류: '+e.message); }
-  finally{ stage.remove(); }
+    var sets = _loadSettings();
+    var results = _readTable(CONF.TAB_RESULTS); // id/date/tourId/.../teamName...
+    var teamPts = {};
+    var teamLatest = {};
+    // Teams 메타
+    var teamMetaRows = _readTable(CONF.TAB_TEAMS);
+    var metaByTeam = {};
+    teamMetaRows.forEach(function(m){
+      var name = String(m['teamname']||'').trim();
+      if(!name) return;
+      metaByTeam[name] = {
+        city: String(m['city']||'').trim(),
+        group: String(m['group']||'').trim(),  // 'd' | 'u' | ''
+        logoUrl: String(m['logourl']||'').trim()
+      };
+    });
+
+    // 누적
+    results.forEach(function(r){
+      var team = String(r['teamname']||'').trim();
+      if(!team) return;
+
+      var base  = _basePoints(r['stage'], sets); if(base<=0) return;
+      var divW  = _divisionWeight(r['division'], sets);
+      var sizeW = _sizeWeight(r['teams'], sets);
+      var timeW = _timeWeight(r['date'], sets);
+
+      var pts = base * divW * sizeW * timeW;
+
+      teamPts[team] = (teamPts[team]||0) + pts;
+
+      var d = _dateISO(r['date']);
+      if(!teamLatest[team] || teamLatest[team] < d){ teamLatest[team] = d; }
+    });
+
+    // 이전 TeamRank 로딩(변동 계산용 prevPoints)
+    var prevMap = {}; // team -> prevPoints
+    _readTable(CONF.TAB_TEAM_R).forEach(function(row){
+      var t = String(row['teamname']||'').trim();
+      if(!t) return;
+      prevMap[t] = _num(row['totalpoints']) || _num(row['prevpoints']) || 0;
+    });
+
+    // 현재 총점 rows + 메타 조인
+    var rowsRaw = Object.keys(teamPts).map(function(name){
+      var total = Math.round(teamPts[name]*100)/100;
+      var prevPts = prevMap.hasOwnProperty(name) ? prevMap[name] : null;
+      var delta = (prevPts==null) ? null : Math.round((total - prevPts)*100)/100;
+      var trend = (delta==null) ? '' : (delta>0?'UP': (delta<0?'DOWN':'FLAT'));
+      var meta = metaByTeam[name] || {city:'', group:'', logoUrl:''};
+      return {
+        teamName   : name,
+        totalPoints: total,
+        lastUpdated: teamLatest[name] || '',
+        prevPoints : prevPts,
+        deltaPoints: delta,
+        trend      : trend,
+        city       : meta.city,
+        group      : meta.group || '',  // 'd' | 'u' | ''
+        rankMove   : 0 // 나중에 계산
+      };
+    });
+
+    // 그룹별 현재 랭크/이전 랭크 기반 rankMove 계산
+    // prevRank: prevPoints 기준 그룹별 정렬 → 순위
+    var prevByGroup = {};
+    rowsRaw.forEach(function(r){
+      var g = r.group || '';
+      if(!prevByGroup[g]) prevByGroup[g] = [];
+      var pp = (r.prevPoints==null) ? -Infinity : r.prevPoints;
+      prevByGroup[g].push({ teamName:r.teamName, prevPoints:pp });
+    });
+    var prevRankMap = {}; // team -> prevRank
+    for(var gk in prevByGroup){
+      var arr = prevByGroup[gk];
+      arr.sort(function(a,b){ return (b.prevPoints - a.prevPoints); });
+      for(var i=0;i<arr.length;i++){
+        var rank = (arr[i].prevPoints===-Infinity) ? null : (i+1);
+        prevRankMap[arr[i].teamName] = rank;
+      }
+    }
+
+    // currRank: totalPoints 기준 그룹별 정렬 → 순위
+    var byGroup = {};
+    rowsRaw.forEach(function(r){
+      var g = r.group || '';
+      if(!byGroup[g]) byGroup[g] = [];
+      byGroup[g].push(r);
+    });
+    var rowsAll = []; // 최종 TeamRank 저장용(정렬은 전체 점수 내림차순 기본)
+    for(var g in byGroup){
+      var list = byGroup[g].slice().sort(function(a,b){ return b.totalPoints - a.totalPoints; });
+      for(var i=0;i<list.length;i++){
+        var currRank = i+1;
+        var team = list[i].teamName;
+        var prevRank = prevRankMap.hasOwnProperty(team) ? prevRankMap[team] : null;
+        var move = (prevRank==null) ? 0 : (prevRank - currRank); // 양수: 순위 상승
+        // list[i]의 rankMove 업데이트
+        list[i].rankMove = move;
+      }
+      rowsAll = rowsAll.concat(list);
+    }
+
+    // TeamRank 저장(기존과 동일 스키마 + city, group, rankMove)
+    rowsAll.sort(function(a,b){ return b.totalPoints - a.totalPoints; });
+    _writeTable(CONF.TAB_TEAM_R,
+      ['teamName','totalPoints','lastUpdated','prevPoints','deltaPoints','trend','city','group','rankMove'],
+      rowsAll
+    );
+
+    // 히스토리 스냅샷 저장(그룹 포함)
+    var snapAt = _nowISO();
+    var histRows = rowsAll.map(function(r){
+      return { snapshotAt: snapAt, teamName: r.teamName, totalPoints: r.totalPoints, group: r.group||'' };
+    });
+    _appendRows(CONF.TAB_TRHIST, ['snapshotAt','teamName','totalPoints','group'], histRows);
+
+    // 캐시 저장(그룹별)
+    saveLeaderboardCache_('');   // all
+    saveLeaderboardCache_('d');  // 일반부
+    saveLeaderboardCache_('u');  // 대학부
+
+    return { recomputedAt: snapAt, teamCount: rowsAll.length };
+  }finally{
+    try{ lock.releaseLock(); }catch(e){}
+  }
 }
 
-/* 부트스트랩 */
-(function init(){
-  const label = DIVS[CUR_DIV].label;
-  $('#heroSub').textContent = label;
-  document.title = `BDR 랭킹 - ${label}`;
-  document.querySelectorAll('#divTabs button').forEach(btn=>{
-    const on = btn.dataset.div === CUR_DIV;
-    btn.classList.toggle('on', on);
-    btn.setAttribute('aria-selected', on ? 'true':'false');
+// ------------------ Cache (group-aware) ------------------
+function leaderboardCacheKey_(group){
+  return 'cache:team:' + String(group||'');
+}
+function saveLeaderboardCache_(group){
+  var props = PropertiesService.getScriptProperties();
+  var data = getLeaderboardRaw_(group);
+  var payload = { savedAt: _nowISO(), data: data };
+  props.setProperty(leaderboardCacheKey_(group), JSON.stringify(payload));
+  return payload;
+}
+function getLeaderboardFromCache_(group){
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(leaderboardCacheKey_(group));
+  if(!raw) return null;
+  try{
+    var obj = JSON.parse(raw);
+    var saved = new Date(obj.savedAt).getTime();
+    if(Date.now() - saved > CONF.CACHE_TTL_SEC*1000) return null;
+    return obj.data;
+  }catch(e){ return null; }
+}
+function getLeaderboard_(group){
+  var cached = getLeaderboardFromCache_(group);
+  if(cached) return cached;
+  return saveLeaderboardCache_(group).data;
+}
+function getLeaderboardRaw_(group){
+  // TeamRank에서 읽어 그룹 필터 후 랭크/정렬 부여
+  var rows = _readTable(CONF.TAB_TEAM_R).map(function(r){
+    return {
+      teamName   : r['teamname'],
+      totalPoints: _num(r['totalpoints']) || 0,
+      lastUpdated: r['lastupdated']||'',
+      prevPoints : (r['prevpoints']===''?null:_num(r['prevpoints'])),
+      deltaPoints: (r['deltapoints']===''?null:_num(r['deltapoints'])),
+      trend      : r['trend']||'',
+      city       : r['city']||'',
+      group      : r['group']||'',
+      rankMove   : _num(r['rankmove']) || 0
+    };
   });
-  loadFromAPI(CUR_DIV);
-})();
-</script>
-</body>
-</html>
+
+  // 그룹 필터
+  var g = String(group||'').trim();
+  if(g==='d' || g==='u'){ rows = rows.filter(function(x){ return (String(x.group||'')===g); }); }
+
+  // 정렬(점수 내림차순), 랭크 번호 부여(그룹 내 기준)
+  rows.sort(function(a,b){ return b.totalPoints - a.totalPoints; });
+  for(var i=0;i<rows.length;i++){ rows[i].rank = i+1; }
+
+  return rows;
+}
+
+// ------------------ API Handlers ------------------
+function handleGet_(p){
+  var path = String(p.path||'').trim();
+
+  if(path==='health'){
+    return _ok({ version: VERSION, time:_nowISO() });
+  }
+
+  if(path==='leaderboard'){
+    var group = (p.group||'').trim(); // '', 'd', 'u'
+    var limit = _int(p.limit) || 0;
+    var offset = _int(p.offset) || 0;
+
+    var data = getLeaderboard_(group);
+    var sliced = (limit && limit>0) ? data.slice(offset, offset+limit) : data;
+    return _ok({ scope:'team', group: group||'', count: data.length, rows: sliced });
+  }
+
+  if(path==='results'){
+    var div = (p.division||'').trim();
+    var year= _int(p.year);
+    var rows = _readTable(CONF.TAB_RESULTS).filter(function(r){
+      if(div){
+        var norm = _normalizeDivision(r['division']);
+        if(norm!==div) return false;
+      }
+      if(year){
+        var d = new Date(r['date']);
+        if(!isNaN(d) && d.getFullYear()!==year) return false;
+      }
+      return true;
+    });
+    return _ok({ count: rows.length, rows: rows });
+  }
+
+  if(path==='recompute'){
+    var res = recomputeRanking_();
+    return _ok(res);
+  }
+
+  return _ok({ version: VERSION, hello:'BDR Ranking Backend (TeamOnly+Group)' });
+}
+
+function handlePost_(p, body){
+  var path = String(p.path||'').trim();
+
+  var json=null;
+  try{ json = body ? JSON.parse(body) : {}; }catch(e){ return _err('invalid JSON body'); }
+
+  if(path==='upsertResults'){
+    var rows = Array.isArray(json.rows)? json.rows : [];
+    if(!rows.length) return _err('rows required');
+
+    ensureResultsHeader_();
+    var sh = _getSheet(CONF.TAB_RESULTS);
+    var headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(function(h){ return String(h); });
+
+    var now = _nowISO();
+    var toAppend = [];
+    rows.forEach(function(r){
+      var div = _normalizeDivision(r.division);
+      var rec = {
+        id       : _uuid(),
+        date     : r.date || '',
+        tourId   : r.tourId || '',
+        tourName : r.tourName || '',
+        division : div,
+        teams    : r.teams || '',
+        stage    : r.stage || '',
+        teamName : r.teamName || '',
+        entrySize: r.entrySize || '',
+        createdAt: now,
+        updatedAt: now,
+      };
+      toAppend.push(rec);
+    });
+
+    _appendRows(CONF.TAB_RESULTS, headers, toAppend);
+    if(json.recompute===true){ recomputeRanking_(); }
+    return _ok({ upserted: toAppend.length });
+  }
+
+  if(path==='removeResults'){
+    var ids = Array.isArray(json.ids)? json.ids : [];
+    if(!ids.length) return _err('ids required');
+    var sh2 = _getSheet(CONF.TAB_RESULTS); if(!sh2) return _err('Results sheet not found');
+    var vals = sh2.getDataRange().getValues();
+    var headers = vals[0].map(function(h){ return _lc(h); });
+    var colId = headers.indexOf('id');
+    if(colId===-1) return _err('Results.id header missing');
+    var keep = [vals[0]];
+    for(var i=1;i<vals.length;i++){
+      var row = vals[i];
+      if(ids.indexOf(row[colId])!==-1) continue;
+      keep.push(row);
+    }
+    sh2.clearContents();
+    sh2.getRange(1,1,keep.length,keep[0].length).setValues(keep);
+    if(json.recompute===true){ recomputeRanking_(); }
+    return _ok({ removed: ids.length });
+  }
+
+  if(path==='recompute'){
+    var res2 = recomputeRanking_();
+    return _ok(res2);
+  }
+
+  return _err('Unknown POST path: ' + path);
+}
+
+// ------------------ Entrypoints ------------------
+function doGet(e){
+  try{
+    var p = (e && e.parameter) || {};
+    return handleGet_(p);
+  }catch(err){
+    return _err(err && err.message ? err.message : String(err));
+  }
+}
+function doPost(e){
+  try{
+    var p = (e && e.parameter) || {};
+    var body = (e && e.postData && e.postData.contents) ? e.postData.contents : '';
+    return handlePost_(p, body);
+  }catch(err){
+    return _err(err && err.message ? err.message : String(err));
+  }
+}
+
+// ------------------ UI ------------------
+function onOpen(){
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu('BDR Ranking')
+    .addItem('재계산 실행', 'recompute')
+    .addItem('헤더 정렬/보정', 'ensureResultsHeader_')
+    .addItem('Teams 헤더 보정', 'ensureTeamsHeader_')
+    .addItem('셀프테스트 시딩', 'selfTest_')
+    .addToUi();
+}
+function recompute(){ // 에디터/메뉴용 공개 함수
+  recomputeRanking_();
+}
+
+// ------------------ Self Test ------------------
+function selfTest_(){
+  ensureResultsHeader_();
+  ensureTeamsHeader_();
+
+  // Settings 샘플(필요 시)
+  if(!_getSheet(CONF.TAB_SETTINGS)){
+    _writeTable(CONF.TAB_SETTINGS, ['key','value','value2'], [
+      {key:'BASE_POINTS', value:'우승', value2:100},
+      {key:'BASE_POINTS', value:'준우승', value2:70},
+      {key:'BASE_POINTS', value:'4강', value2:50},
+      {key:'BASE_POINTS', value:'8강', value2:25},
+      {key:'BASE_POINTS', value:'참가', value2:10},
+      {key:'DIV_WEIGHT', value:'D3', value2:1},
+      {key:'DIV_WEIGHT', value:'D4', value2:0.75},
+      {key:'DIV_WEIGHT', value:'D5', value2:0.5},
+      {key:'DIV_WEIGHT', value:'D6', value2:0.25},
+      {key:'DIV_WEIGHT', value:'D7', value2:0.1},
+      {key:'TIME_WEIGHT', value:'Y-0', value2:1},
+      {key:'TIME_WEIGHT', value:'Y-1', value2:0.5},
+      {key:'TIME_WEIGHT', value:'Y-2', value2:0.25},
+      {key:'TIME_WEIGHT', value:'Y-3', value2:0},
+      {key:'SIZE_RULE', value:'>=24', value2:1.5},
+      {key:'SIZE_RULE', value:'13-23', value2:1.25},
+      {key:'SIZE_RULE', value:'=12', value2:1.0},
+      {key:'SIZE_RULE', value:'<=11', value2:0.5},
+    ]);
+  }
+
+  // Teams 샘플
+  var tSh = _getSheet(CONF.TAB_TEAMS);
+  var tHeaders = tSh.getRange(1,1,1,tSh.getLastColumn()).getValues()[0].map(function(h){ return String(h); });
+  var teamsSample = [
+    {teamName:'STIZ', city:'경기 남양주', group:'d', logoUrl:''},
+    {teamName:'BDR',  city:'서울',       group:'d', logoUrl:''},
+    {teamName:'OWLS', city:'서울',       group:'u', logoUrl:''},
+    {teamName:'SLOW', city:'인천',       group:'d', logoUrl:''},
+  ];
+  _appendRows(CONF.TAB_TEAMS, tHeaders, teamsSample);
+
+  // Results 샘플
+  var rSh = _getSheet(CONF.TAB_RESULTS);
+  var rHeaders = rSh.getRange(1,1,1,rSh.getLastColumn()).getValues()[0].map(function(h){ return String(h); });
+  var now = _nowISO(), today = _dateISO(new Date());
+  var lastYear = _dateISO(new Date(new Date().setFullYear(new Date().getFullYear()-1)));
+  var sample = [
+    {id:_uuid(), date:today,    tourId:'T001', tourName:'9월리그', division:'D3', teams:24, stage:'우승',   teamName:'STIZ', entrySize:12, createdAt:now, updatedAt:now},
+    {id:_uuid(), date:today,    tourId:'T001', tourName:'9월리그', division:'D3', teams:24, stage:'준우승', teamName:'BDR',  entrySize:10, createdAt:now, updatedAt:now},
+    {id:_uuid(), date:today,    tourId:'T002', tourName:'주말컵',  division:'비기너스', teams:16, stage:'4강', teamName:'OWLS', entrySize:9, createdAt:now, updatedAt:now},
+    {id:_uuid(), date:lastYear, tourId:'T003', tourName:'작년대회', division:'D4', teams:12, stage:'우승',   teamName:'SLOW', entrySize:10, createdAt:now, updatedAt:now},
+  ];
+  _appendRows(CONF.TAB_RESULTS, rHeaders, sample);
+
+  var res = recomputeRanking_();
+  Logger.log(JSON.stringify(res));
+}
